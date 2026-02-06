@@ -1,6 +1,7 @@
 # **SQL Plan Insights (PowerShell)**
 
 A powerful PowerShell script that transforms raw SQL Server execution plan XML into performance insights, revealing problems quickly.
+Written using AI and my own brain.
 
 ## **Why This Exists**
 
