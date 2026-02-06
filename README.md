@@ -26,8 +26,6 @@ This script parses SQL Server ShowPlan XML and automatically surfaces:
 
 ### **1\. Get the Script**
 
-text
-
 \# Clone the repository
 git clone https://github.com/rafinnerty/dbaStuff.git
 cd dbaStuff
@@ -36,8 +34,6 @@ cd dbaStuff
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/rafinnerty/dbaStuff/main/Get-SqlPlanInsights.ps1" -OutFile "Get-SqlPlanInsights.ps1"
 
 ### **2\. Run Your First Analysis**
-
-text
 
 \# Source the function into your session
 . .\\Get-SqlPlanInsights.ps1
@@ -51,20 +47,14 @@ Get-SqlPlanInsights -Path "C:\\temp\\slow\_query.sqlplan"
 
 ### **Basic Analysis**
 
-text
-
 Get-SqlPlanInsights -Path ".\\Execution plan.xml"
 
 ### **Deep Dive Analysis**
-
-text
 
 \# Get more operator details and check for index coverage
 Get-SqlPlanInsights -Path ".\\plan.xml" -TopOperators 25 -InspectDatabase -ServerInstance ".\\SQL2019" -Database "AdventureWorks"
 
 ### **Output Control**
-
-text
 
 \# Send the full report to a text file for sharing
 Get-SqlPlanInsights -Path ".\\plan.xml" -OutputTo File -OutputFilePath ".\\analysis\_report.txt"
@@ -72,8 +62,6 @@ Get-SqlPlanInsights -Path ".\\plan.xml" -OutputTo File -OutputFilePath ".\\analy
 ## **Sample Output Walkthrough**
 
 The script generates a structured console report. Here's what you'll see:
-
-text
 
 \=== SQL Plan Insights ===
 File: C:\\plans\\query.sqlplan
