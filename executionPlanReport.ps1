@@ -49,7 +49,7 @@ function Get-SqlPlanInsights {
     [switch]$DebugSargability
   )
 
-  Write-Output 'v28-fixed'
+  Write-Output 'v32-fixed13'
   if (-not (Test-Path -LiteralPath $Path)) { throw "File not found: $Path" }
 
   [xml]$xml = Get-Content -LiteralPath $Path -Raw
@@ -142,14 +142,16 @@ if ($chosenStmt) {
   # --- numeric formatting helpers ---
   # Row counts: 0 decimal places
   function F0($v) {
-    if ($null -eq $v -or $v -eq '') { return "" }
+    if ($null -eq $v) { return "" }
+    if ($v -is [string] -and [string]::IsNullOrWhiteSpace($v)) { return "" }
     try { return ([string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0:0}", [double]$v)) }
     catch { return "$v" }
   }
 
   # Non-row numeric values (costs, ratios, ms, KB, etc.): 2 decimal places
   function F2($v) {
-    if ($null -eq $v -or $v -eq '') { return "" }
+    if ($null -eq $v) { return "" }
+    if ($v -is [string] -and [string]::IsNullOrWhiteSpace($v)) { return "" }
     try { return ([string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "{0:0.00}", [double]$v)) }
     catch { return "$v" }
   }
@@ -214,7 +216,7 @@ if ($chosenStmt) {
   }
 
   function Get-RunTimeSum($relOpNode) {
-    $rt = $relOpNode.SelectNodes(".//sp:RunTimeCountersPerThread", $nsm)
+    $rt = $relOpNode.SelectNodes("./sp:RunTimeInformation/sp:RunTimeCountersPerThread", $nsm)
     if (-not $rt -or @($rt).Count -eq 0) { return $null }
 
     # Use arrays for keys to avoid "Collection was modified..." edge cases
@@ -231,7 +233,16 @@ if ($chosenStmt) {
     $has = @{}
     foreach ($k in $keys) { $has[$k] = $false }
 
+    # Collect per-thread ActualRows for readability/skew analysis
+    $threadRows = @()
+
     foreach ($t in $rt) {
+      $thr = To-IntOrNull ($t.GetAttribute("Thread"))
+      $ar  = To-DoubleOrNull ($t.GetAttribute("ActualRows"))
+      if ($thr -ne $null -and $ar -ne $null) {
+        $threadRows += [pscustomobject]@{ Thread = $thr; ActualRows = [double]$ar }
+      }
+
       foreach ($k in $keys) {
         $v = $t.GetAttribute($k)
         if (-not [string]::IsNullOrWhiteSpace($v)) {
@@ -241,8 +252,78 @@ if ($chosenStmt) {
       }
     }
 
+# Aggregate per-thread rows by Thread id (ShowPlan can emit multiple counters for the same Thread)
+# This prevents duplicate thread IDs in output and makes skew math stable/readable.
+if ($threadRows -and @($threadRows).Count -gt 0) {
+  $rowsByThread = @{}
+  foreach ($tr in @($threadRows)) {
+    $tid = [int]$tr.Thread
+    $rowsByThread[$tid] = ($rowsByThread[$tid] + [double]$tr.ActualRows)
+  }
+  $threadRowsAgg = @()
+  foreach ($k in @($rowsByThread.Keys | Sort-Object)) {
+    $threadRowsAgg += [pscustomobject]@{ Thread = [int]$k; ActualRows = [double]$rowsByThread[$k] }
+  }
+  $threadRows = $threadRowsAgg
+}
+
+    # --- ActualRows aggregation nuance (parallel plans) ---
+    # ShowPlan records counters per thread. In parallel plans:
+    #  - "Work" rows = sum(ActualRows) across worker threads (useful to spot wasted work / overshoot)
+    #  - "Out" rows  = best-effort output rows (coordinator Thread=0) but only trusted for some operators
+    $t0 = $null
+    foreach ($t in $rt) {
+      if ($t.GetAttribute("Thread") -eq "0") { $t0 = $t; break }
+    }
+
+    $phys = $relOpNode.GetAttribute("PhysicalOp")
+    $log  = $relOpNode.GetAttribute("LogicalOp")
+    $par  = $relOpNode.GetAttribute("Parallel")
+
+    $trustT0 = $false
+    if ($par -eq "false") { $trustT0 = $true }
+    elseif ($phys -eq "Parallelism" -and $log -match "Gather Streams") { $trustT0 = $true }
+
+    $sumActualRowsWork = $sum.ActualRows
+    $sumActualRowsOut  = $null
+    if ($trustT0 -and $t0 -ne $null) {
+      $v0 = $t0.GetAttribute("ActualRows")
+      if (-not [string]::IsNullOrWhiteSpace($v0)) { $sumActualRowsOut = [double]$v0 }
+    }
+
+    # Per-thread skew metrics (workers only, exclude Thread=0)
+    $workers = $threadRows | Where-Object { $_.Thread -ne 0 }
+    if (@($workers | Where-Object { $_.ActualRows -gt 0 }).Count -gt 0) { $workers = $workers | Where-Object { $_.ActualRows -gt 0 } }
+    $wCount = @($workers).Count
+    $minW = $null; $maxW = $null; $avgW = $null; $skewMaxAvg = $null; $skewMaxMin = $null
+    if ($wCount -gt 0) {
+      $mW = $workers | Measure-Object -Property ActualRows -Minimum -Maximum -Average
+      $minW = [double]$mW.Minimum
+      $maxW = [double]$mW.Maximum
+      $avgW = [double]$mW.Average
+      if ($avgW -gt 0) { $skewMaxAvg = ($maxW / $avgW) }
+      if ($minW -gt 0) { $skewMaxMin = ($maxW / $minW) }
+    }
+
     $o = [ordered]@{}
     foreach ($k in $keys) { if ($has[$k]) { $o[$k] = $sum[$k] } }
+
+    # Preserve both interpretations
+    $o['ActualRowsWork'] = $sumActualRowsWork
+    $o['ActualRowsOut']  = $sumActualRowsOut
+
+    # Back-compat: prefer Out where trusted, otherwise fall back to Work
+    $o['ActualRows'] = $(if ($sumActualRowsOut -ne $null) { $sumActualRowsOut } else { $sumActualRowsWork })
+
+    # Per-thread detail for readability
+    $o['ThreadRows'] = $threadRows
+    $o['WorkerThreadCount'] = $wCount
+    $o['ThreadMinRows'] = $minW
+    $o['ThreadMaxRows'] = $maxW
+    $o['ThreadAvgRows'] = $avgW
+    $o['ThreadSkewMaxAvg'] = $skewMaxAvg
+    $o['ThreadSkewMaxMin'] = $skewMaxMin
+
     return [pscustomobject]$o
   }
 
@@ -263,10 +344,67 @@ if ($chosenStmt) {
     return $null
   }
 
+
+# Build a clearer seek predicate when the ShowPlan exposes RangeColumns + RangeExpressions
+# (e.g. show: [Users].[Id] = [Posts].[OwnerUserId]) instead of only the expression side.
+function Get-SeekPredicatePretty($ixNode) {
+  if (-not $ixNode) { return $null }
+
+  function Format-ColumnRef($cr) {
+    if (-not $cr) { return $null }
+    $d = $cr.GetAttribute("Database")
+    $s = $cr.GetAttribute("Schema")
+    $t = $cr.GetAttribute("Table")
+    $c = $cr.GetAttribute("Column")
+    $parts = @($d,$s,$t,$c) | Where-Object { $_ -and $_ -ne "" }
+    if ($parts.Count -eq 0) { return $null }
+    return "[" + ($parts -join "].[") + "]"
+  }
+
+  $preds = $ixNode.SelectNodes(".//sp:SeekPredicateNew", $nsm)
+  if (-not $preds -or @($preds).Count -eq 0) { return $null }
+
+  $clauses = @()
+  foreach ($p in @($preds)) {
+    $sk = $p.SelectSingleNode(".//sp:SeekKeys", $nsm)
+    if (-not $sk) { continue }
+
+    $startCols  = $sk.SelectNodes(".//sp:StartRange/sp:RangeColumns/sp:ColumnReference", $nsm)
+    $startExprs = $sk.SelectNodes(".//sp:StartRange/sp:RangeExpressions/sp:ScalarOperator", $nsm)
+    $endCols    = $sk.SelectNodes(".//sp:EndRange/sp:RangeColumns/sp:ColumnReference", $nsm)
+    $endExprs   = $sk.SelectNodes(".//sp:EndRange/sp:RangeExpressions/sp:ScalarOperator", $nsm)
+
+    # Only render the 1:1 simple case cleanly; fall back to ScalarString elsewhere.
+    if ($startCols -and $startExprs -and @($startCols).Count -eq 1 -and @($startExprs).Count -eq 1) {
+      $col = Format-ColumnRef $startCols[0]
+      $start = $startExprs[0].GetAttribute("ScalarString")
+
+      if (-not [string]::IsNullOrWhiteSpace($col) -and -not [string]::IsNullOrWhiteSpace($start)) {
+        if ($endCols -and $endExprs -and @($endCols).Count -eq 1 -and @($endExprs).Count -eq 1) {
+          $endCol = Format-ColumnRef $endCols[0]
+          $end = $endExprs[0].GetAttribute("ScalarString")
+
+          if ($endCol -eq $col -and -not [string]::IsNullOrWhiteSpace($end)) {
+            if ($end -eq $start) {
+              $clauses += ("{0} = {1}" -f $col, $start)
+            } else {
+              $clauses += ("{0} BETWEEN {1} AND {2}" -f $col, $start, $end)
+            }
+            continue
+          }
+        }
+        $clauses += ("{0} >= {1}" -f $col, $start)
+      }
+    }
+  }
+
+  if ($clauses.Count -gt 0) { return ($clauses -join " AND ") }
+  return $null
+}
   function Get-AccessDetails($relOpNode) {
-    $ixSeek  = $relOpNode.SelectSingleNode(".//sp:IndexSeek", $nsm)
-    $ixScan  = $relOpNode.SelectSingleNode(".//sp:IndexScan", $nsm)
-    $tblScan = $relOpNode.SelectSingleNode(".//sp:TableScan", $nsm)
+    $ixSeek  = $relOpNode.SelectSingleNode("./sp:IndexSeek", $nsm)
+    $ixScan  = $relOpNode.SelectSingleNode("./sp:IndexScan", $nsm)
+    $tblScan = $relOpNode.SelectSingleNode("./sp:TableScan", $nsm)
 
     $seekPred = $null
     $residualPred = $null
@@ -274,11 +412,14 @@ if ($chosenStmt) {
 
     if ($ixSeek) {
       $kind = "Index Seek"
-      $seekPred     = Get-ScalarString ($ixSeek.SelectSingleNode(".//sp:SeekPredicates", $nsm))
+      $seekPred     = Get-SeekPredicatePretty $ixSeek
+      if (-not $seekPred) { $seekPred = Get-ScalarString ($ixSeek.SelectSingleNode(".//sp:SeekPredicates", $nsm)) }
       $residualPred = Get-ScalarString ($ixSeek.SelectSingleNode(".//sp:Predicate", $nsm))
     }
     elseif ($ixScan) {
       $kind = "Index Scan"
+      $seekPred     = Get-SeekPredicatePretty $ixScan
+      if (-not $seekPred) { $seekPred = Get-ScalarString ($ixScan.SelectSingleNode(".//sp:SeekPredicates", $nsm)) }
       $residualPred = Get-ScalarString ($ixScan.SelectSingleNode(".//sp:Predicate", $nsm))
     }
     elseif ($tblScan) {
@@ -364,6 +505,72 @@ if ($chosenStmt) {
   $dop = $null
   if ($qp) { $dop = To-IntOrNull ($qp.GetAttribute("DegreeOfParallelism")) }
 
+
+  
+# Observed DOP (best-effort) from runtime thread counters.
+# We compute TWO observations:
+#  - observed(maxRuntime): max worker-thread count across all runtime operators (most practical / robust).
+#  - observed(parallelism): max worker-thread count across Parallelism (exchange) operators *only when they expose worker threads*.
+# Preferred observed DOP:
+#  - If any Parallelism operator exposes >1 worker threads, prefer observed(parallelism).
+#  - Otherwise, fall back to observed(maxRuntime).
+$dopObserved = $null
+$dopObservedParallelism = $null
+$dopObservedMaxRuntime = $null
+try {
+  function Get-ThreadTeamSize([System.Xml.XmlNode]$relOp) {
+    if (-not $relOp) { return $null }
+    $threads = $relOp.SelectNodes("./sp:RunTimeInformation/sp:RunTimeCountersPerThread", $nsm)
+    if (-not $threads -or @($threads).Count -eq 0) { return $null }
+
+    $ids = @()
+    foreach ($t in @($threads)) {
+      $tid = To-IntOrNull ($t.GetAttribute("Thread"))
+      if ($tid -ne $null) { $ids += $tid }
+    }
+    if ($ids.Count -eq 0) { return $null }
+
+    $uniq = @($ids | Sort-Object -Unique)
+    # Exclude coordinator Thread=0 when there are other worker threads
+    if ($uniq.Count -gt 1 -and ($uniq -contains 0)) { $uniq = @($uniq | Where-Object { $_ -ne 0 }) }
+    return $uniq.Count
+  }
+
+  $runtimeOps = Select-Nodes("//sp:RelOp[sp:RunTimeInformation/sp:RunTimeCountersPerThread]")
+  if ($runtimeOps -and @($runtimeOps).Count -gt 0) {
+    $dopObservedMaxRuntime = 1
+    foreach ($r in @($runtimeOps)) {
+      $sz = Get-ThreadTeamSize $r
+      if ($sz -ne $null -and $sz -gt $dopObservedMaxRuntime) { $dopObservedMaxRuntime = $sz }
+    }
+
+    $parOps = Select-Nodes("//sp:RelOp[@PhysicalOp='Parallelism' and sp:RunTimeInformation/sp:RunTimeCountersPerThread]")
+    if ($parOps -and @($parOps).Count -gt 0) {
+      $dopObservedParallelism = 1
+      foreach ($r in @($parOps)) {
+        $sz = Get-ThreadTeamSize $r
+        if ($sz -ne $null -and $sz -gt $dopObservedParallelism) { $dopObservedParallelism = $sz }
+      }
+      # Only treat it as a meaningful observation if > 1
+      if ($dopObservedParallelism -le 1) { $dopObservedParallelism = $null }
+    }
+
+    if ($dopObservedParallelism -ne $null -and $dopObservedParallelism -gt 1) {
+      $dopObserved = $dopObservedParallelism
+    } else {
+      $dopObserved = $dopObservedMaxRuntime
+    }
+  } else {
+    $dopObserved = $null
+    $dopObservedParallelism = $null
+    $dopObservedMaxRuntime = $null
+  }
+} catch {
+  $dopObserved = $null
+  $dopObservedParallelism = $null
+  $dopObservedMaxRuntime = $null
+}
+
   $mg = Select-Single "//sp:MemoryGrantInfo"
   $memoryGrantInfo = $null
   if ($mg) {
@@ -413,10 +620,20 @@ if ($chosenStmt) {
       $st = Get-StatementInfo $op
 
       $rt = Get-RunTimeSum $op
-      $actRows = $null; $execs = $null; $rowsRead = $null; $rebinds = $null; $rewinds = $null
-
+      $actRows = $null; $actRowsOut = $null; $actRowsWork = $null
+      $threadRows = $null; $workerThreads = $null; $tMin = $null; $tMax = $null; $tAvg = $null; $tSkewMA = $null; $tSkewMM = $null
+      $execs = $null; $rowsRead = $null; $rebinds = $null; $rewinds = $null
       if ($rt) {
         if ($rt.PSObject.Properties.Name -contains "ActualRows")       { $actRows = [double]$rt.ActualRows }
+        if ($rt.PSObject.Properties.Name -contains "ActualRowsOut")    { $actRowsOut = if ($rt.ActualRowsOut -ne $null -and $rt.ActualRowsOut -ne '') { [double]$rt.ActualRowsOut } else { $null } }
+        if ($rt.PSObject.Properties.Name -contains "ActualRowsWork")   { $actRowsWork = if ($rt.ActualRowsWork -ne $null -and $rt.ActualRowsWork -ne '') { [double]$rt.ActualRowsWork } else { $null } }
+        if ($rt.PSObject.Properties.Name -contains "ThreadRows")       { $threadRows = $rt.ThreadRows }
+        if ($rt.PSObject.Properties.Name -contains "WorkerThreadCount"){ $workerThreads = [int]$rt.WorkerThreadCount }
+        if ($rt.PSObject.Properties.Name -contains "ThreadMinRows")    { $tMin = $rt.ThreadMinRows }
+        if ($rt.PSObject.Properties.Name -contains "ThreadMaxRows")    { $tMax = $rt.ThreadMaxRows }
+        if ($rt.PSObject.Properties.Name -contains "ThreadAvgRows")    { $tAvg = $rt.ThreadAvgRows }
+        if ($rt.PSObject.Properties.Name -contains "ThreadSkewMaxAvg") { $tSkewMA = $rt.ThreadSkewMaxAvg }
+        if ($rt.PSObject.Properties.Name -contains "ThreadSkewMaxMin") { $tSkewMM = $rt.ThreadSkewMaxMin }
         if ($rt.PSObject.Properties.Name -contains "ActualExecutions") { $execs   = [double]$rt.ActualExecutions }
         if ($rt.PSObject.Properties.Name -contains "ActualRowsRead")   { $rowsRead= [double]$rt.ActualRowsRead }
         if ($rt.PSObject.Properties.Name -contains "ActualRebinds")    { $rebinds = [double]$rt.ActualRebinds }
@@ -444,7 +661,11 @@ if ($chosenStmt) {
       }
 
       $access = Get-AccessDetails $op
-      $predCtx = Get-ScalarString ($op.SelectSingleNode(".//sp:Predicate", $nsm))
+      $predNode = $op.SelectSingleNode(
+        "./sp:Predicate | ./sp:Filter/sp:Predicate | ./sp:IndexScan/sp:Predicate | ./sp:IndexSeek/sp:Predicate | ./sp:TableScan/sp:Predicate",
+        $nsm
+      )
+      $predCtx = Get-ScalarString $predNode
       $nonSarg = Get-NonSargableFlags ($predCtx + " " + $access.SeekPredicate + " " + $access.Residual)
 
       if ($DebugSargability) {
@@ -475,6 +696,15 @@ if ($chosenStmt) {
 
         EstRows = $estRows
         ActRows = $actRows
+        ActRowsOut = $actRowsOut
+        ActRowsWork = $actRowsWork
+        ThreadRows = $threadRows
+        WorkerThreads = $workerThreads
+        ThreadMinRows = $tMin
+        ThreadMaxRows = $tMax
+        ThreadAvgRows = $tAvg
+        ThreadSkewMaxAvg = $tSkewMA
+        ThreadSkewMaxMin = $tSkewMM
         RowsRead = $rowsRead
         Execs   = $execs
         Rebinds = $rebinds
@@ -945,7 +1175,7 @@ $r | Add-Member -NotePropertyName EstSelfCost -NotePropertyValue $self -Force
   try {
     $rtRelOps = Select-Nodes(".//sp:RelOp[sp:RunTimeInformation/sp:RunTimeCountersPerThread]")
     foreach ($r in @($rtRelOps)) {
-      $threads = $r.SelectNodes(".//sp:RunTimeCountersPerThread", $nsm)
+      $threads = $r.SelectNodes("./sp:RunTimeInformation/sp:RunTimeCountersPerThread", $nsm)
       if ($threads -eq $null) { continue }
       $rows = @()
       foreach ($t in @($threads)) {
@@ -1058,7 +1288,7 @@ foreach ($soNode in $scalarOps) {
 
   if ($expr -match "CONVERT_IMPLICIT") { Add-SargIssue $nid "implicit conversion (non-SARGable)" $expr }
 
-  # Parameter-based LIKE (e.g., "Title like [@Search]") – infer leading wildcard from param value if present
+  # Parameter-based LIKE (e.g., "Title like [@Search]") â€“ infer leading wildcard from param value if present
   if (($expr -match "(?i)\blike\s*\[?@Search\]?") -and $searchLeadingWildcard) {
     Add-SargIssue $nid "leading wildcard LIKE via @Search (non-SARGable)" ($expr + "  -- @Search=" + $searchVal)
   }
@@ -1632,6 +1862,9 @@ $dbInspection = [pscustomobject]@{
     File = (Resolve-Path -LiteralPath $Path).Path
     NamespaceUri = $nsUri
     DegreeOfParallelism = $dop
+    ObservedDegreeOfParallelism = $dopObserved
+    ObservedDopParallelism = $dopObservedParallelism
+    ObservedDopMaxRuntime = $dopObservedMaxRuntime
     MemoryGrantInfo = $memoryGrantInfo
     SpillSignalsFound = $spillLikely
 
@@ -1687,7 +1920,11 @@ if ($chosenStmtSummary) {
     Write-Host ("SanityCheck: missingIndexGroups={0}, missingIndexes={1}, links={2}" -f `
       (@($missingIndexGroups).Count), (@($missingIndexes).Count), ($referenceLinks.PSObject.Properties.Count)) -ForegroundColor DarkCyan
   }
-  Write-Host ("DOP: {0}" -f ($(if ($dop) { $dop } else { "unknown" })))
+  $dopPlannedText = if ($dop -ne $null -and $dop -gt 0) { $dop } else { "n/a" }
+  $dopObservedText = if ($dopObserved -ne $null -and $dopObserved -gt 0) { $dopObserved } else { "n/a" }
+  $dopParText = if ($dopObservedParallelism -ne $null -and $dopObservedParallelism -gt 0) { $dopObservedParallelism } else { "n/a" }
+  $dopMaxText = if ($dopObservedMaxRuntime -ne $null -and $dopObservedMaxRuntime -gt 0) { $dopObservedMaxRuntime } else { "n/a" }
+  Write-Host ("DOP: planned={0} observed={1} (parallelism={2} maxRuntime={3})" -f $dopPlannedText, $dopObservedText, $dopParText, $dopMaxText)
 
 
   $hasMGNumbers = $memoryGrantInfo -and (
@@ -1744,7 +1981,10 @@ if ($chosenStmtSummary) {
       @{n='EstCost';e={F2 $_.EstCost}},
       @{n='SelfCost';e={ if ($_.HasKids -and ($null -eq $_.EstSelfCost -or $_.EstSelfCost -eq '')) { '0.00' } else { F2 $_.EstSelfCost } }},
       @{n='EstRows';e={F0 $_.EstRows}},
-      @{n='ActRows';e={F0 $_.ActRows}},
+      @{n='ActOut';e={ if ($_.ActRowsOut -ne $null -and $_.ActRowsOut -ne '') { F0 $_.ActRowsOut } else { '' } }},
+      @{n='ActWork';e={ if ($_.ActRowsWork -ne $null -and $_.ActRowsWork -ne '') { F0 $_.ActRowsWork } else { '' } }},
+      @{n='RatioOut';e={ if ($_.ActRowsOut -ne $null -and $_.ActRowsOut -ne '' -and $_.EstRows -ne $null -and $_.EstRows -ne '' -and [double]$_.EstRows -ne 0) { F3 (([double]$_.ActRowsOut)/([double]$_.EstRows)) } else { '' } }},
+      @{n='RatioWork';e={ if ($_.ActRowsWork -ne $null -and $_.ActRowsWork -ne '' -and $_.EstRows -ne $null -and $_.EstRows -ne '' -and [double]$_.EstRows -ne 0) { F3 (([double]$_.ActRowsWork)/([double]$_.EstRows)) } else { '' } }},
       @{n='RowsRead';e={F0 $_.RowsRead}},
       @{n='Execs';e={F0 $_.Execs}},
       @{n='Access';e={$_.Access}},
@@ -1753,8 +1993,17 @@ if ($chosenStmtSummary) {
     Format-Table -AutoSize
 
   Write-Host ""
+  Write-Host ""
   Write-Host "Top operators by EstimatedSelfCost (delta):" -ForegroundColor Yellow
-  $result.TopSelfOperators |
+
+  # Avoid duplicating the same operators already shown in the subtree-cost list.
+  $topIds = @{}
+  foreach ($o in $result.TopOperators) { $topIds[$o.NodeId] = $true }
+
+  $selfFiltered = $result.TopSelfOperators | Where-Object { -not $topIds.ContainsKey($_.NodeId) }
+
+  if (@($selfFiltered).Count -gt 0) {
+  $selfFiltered |
     Select-Object `
       @{n='NodeId';e={$_.NodeId}},
       @{n='PhysicalOp';e={$_.PhysicalOp}},
@@ -1762,15 +2011,21 @@ if ($chosenStmtSummary) {
       @{n='SelfCost';e={ if ($_.HasKids -and ($null -eq $_.EstSelfCost -or $_.EstSelfCost -eq '')) { '0.00' } else { F2 $_.EstSelfCost } }},
       @{n='EstCost';e={F2 $_.EstCost}},
       @{n='EstRows';e={F0 $_.EstRows}},
-      @{n='ActRows';e={F0 $_.ActRows}},
+      @{n='ActOut';e={ if ($_.ActRowsOut -ne $null -and $_.ActRowsOut -ne '') { F0 $_.ActRowsOut } else { '' } }},
+      @{n='ActWork';e={ if ($_.ActRowsWork -ne $null -and $_.ActRowsWork -ne '') { F0 $_.ActRowsWork } else { '' } }},
+      @{n='RatioOut';e={ if ($_.ActRowsOut -ne $null -and $_.ActRowsOut -ne '' -and $_.EstRows -ne $null -and $_.EstRows -ne '' -and [double]$_.EstRows -ne 0) { F3 (([double]$_.ActRowsOut)/([double]$_.EstRows)) } else { '' } }},
+      @{n='RatioWork';e={ if ($_.ActRowsWork -ne $null -and $_.ActRowsWork -ne '' -and $_.EstRows -ne $null -and $_.EstRows -ne '' -and [double]$_.EstRows -ne 0) { F3 (([double]$_.ActRowsWork)/([double]$_.EstRows)) } else { '' } }},
       @{n='RowsRead';e={F0 $_.RowsRead}},
       @{n='Execs';e={F0 $_.Execs}},
       @{n='Access';e={$_.Access}},
       @{n='Object';e={$_.Object}},
       @{n='Warnings';e={$_.Warnings}} |
     Format-Table -AutoSize
+  } else {
+    Write-Host " - (same operators as subtree-cost list; omitted)" -ForegroundColor DarkGray
+  }
 
-  # -----------------------------
+# -----------------------------
   # DBA heuristics output
   # -----------------------------
   Write-Host ""
@@ -1808,7 +2063,7 @@ if ($chosenStmtSummary) {
       Format-Table -AutoSize
   } else {
     if ($skewScanned -gt 0) {
-      Write-Host " - (none detected) Note: Scanned $skewScanned parallel operators; no high skew (ratio ≥ 5) found." -ForegroundColor DarkGray
+      Write-Host " - (none detected) Note: Scanned $skewScanned parallel operators; no high skew (ratio >= 5) found." -ForegroundColor DarkGray
     } else {
       Write-Host " - (none detected)" -ForegroundColor DarkGray
     }
@@ -1830,6 +2085,7 @@ if ($chosenStmtSummary) {
     Write-Host " - (none detected) Note: SQL Server only creates PlanAffectingConvert elements when implicit conversions significantly affect plan choice." -ForegroundColor DarkGray
   }
 
+Write-Host ""
 Write-Host "Predicate SARGability signals (heuristic):" -ForegroundColor Yellow
   $predCount = @($operatorRows | Where-Object { -not [string]::IsNullOrWhiteSpace($_.SeekPredicate) -or -not [string]::IsNullOrWhiteSpace($_.Predicate) -or -not [string]::IsNullOrWhiteSpace($_.Residual) }).Count
   if (@($sargabilityIssues).Count -gt 0) {
@@ -1940,7 +2196,8 @@ Write-Host ""
         @{n='LogicalOp';e={$_.LogicalOp}},
         @{n='EstCost';e={F2 $_.EstCost}},
         @{n='EstRows';e={F0 $_.EstRows}},
-        @{n='ActRows';e={F0 $_.ActRows}},
+        @{n='ActOut';e={ if ($_.ActRowsOut -ne $null -and $_.ActRowsOut -ne '') { F0 $_.ActRowsOut } else { '' } }},
+        @{n='ActWork';e={ if ($_.ActRowsWork -ne $null -and $_.ActRowsWork -ne '') { F0 $_.ActRowsWork } else { '' } }},
         @{n='Object';e={$_.Object}} |
       Format-Table -AutoSize
   }
@@ -1949,19 +2206,29 @@ Write-Host ""
     Write-Host ""
     Write-Host "Inaccurate cardinality estimation (SSMS-style):" -ForegroundColor Yellow
 
-    # Preformatted string fields => neat alignment
-    $cardinalityIssues |
-      Select-Object -First 25 `
-        @{n='NodeId';e={$_.NodeId}},
-        @{n='PhysicalOp';e={$_.PhysicalOp}},
-        @{n='LogicalOp';e={$_.LogicalOp}},
-        @{n='EstRows';e={F0 $_.EstRows}},
-        @{n='ActRows';e={F0 $_.ActRows}},
-        @{n='Ratio';e={ if ($_.Ratio -eq [double]::PositiveInfinity) { "inf" } else { F3 $_.Ratio } }},
-        @{n='EstCost';e={F2 $_.EstCost}},
-        @{n='Access';e={$_.Access}},
-        @{n='Object';e={$_.Object}} |
-      Format-Table -AutoSize
+    # Avoid repeating the same nodes already shown in the Top operators list.
+    # (Top list includes EstRows/ActRows/Ratio now.)
+    $ceFiltered = $cardinalityIssues | Where-Object { -not $topIds.ContainsKey($_.NodeId) }
+
+    if (@($ceFiltered).Count -gt 0) {
+      $ceFiltered |
+        Select-Object -First 25 `
+          @{n='NodeId';e={$_.NodeId}},
+          @{n='PhysicalOp';e={$_.PhysicalOp}},
+          @{n='LogicalOp';e={$_.LogicalOp}},
+          @{n='EstRows';e={F0 $_.EstRows}},
+          @{n='ActOut';e={ if ($_.ActRowsOut -ne $null -and $_.ActRowsOut -ne '') { F0 $_.ActRowsOut } else { '' } }},
+          @{n='ActWork';e={ if ($_.ActRowsWork -ne $null -and $_.ActRowsWork -ne '') { F0 $_.ActRowsWork } else { '' } }},
+          @{n='RatioOut';e={ if ($_.ActRowsOut -ne $null -and $_.ActRowsOut -ne '' -and $_.EstRows -ne $null -and $_.EstRows -ne '' -and [double]$_.EstRows -ne 0) { F3 (([double]$_.ActRowsOut)/([double]$_.EstRows)) } else { '' } }},
+          @{n='RatioWork';e={ if ($_.ActRowsWork -ne $null -and $_.ActRowsWork -ne '' -and $_.EstRows -ne $null -and $_.EstRows -ne '' -and [double]$_.EstRows -ne 0) { F3 (([double]$_.ActRowsWork)/([double]$_.EstRows)) } else { '' } }},
+          @{n='RatioBest';e={ if ($_.Ratio -eq [double]::PositiveInfinity) { "inf" } else { F3 $_.Ratio } }},
+          @{n='EstCost';e={F2 $_.EstCost}},
+          @{n='Access';e={$_.Access}},
+          @{n='Object';e={$_.Object}} |
+        Format-Table -AutoSize
+    } else {
+      Write-Host " - (all CE-mismatch nodes are already listed above in Top operators; omitted)" -ForegroundColor DarkGray
+    }
 
     Write-Host ""
     Write-Host "CE hot spots (grouped by statement):" -ForegroundColor DarkYellow
@@ -1976,24 +2243,98 @@ Write-Host ""
       Format-Table -AutoSize
 
     Write-Host ""
-    Write-Host "CE details (top 5 statements, top 3 nodes each):" -ForegroundColor DarkYellow
-    foreach ($s in ($result.CEStatementSummary | Select-Object -First 5)) {
-      Write-Host ("StatementId {0}: {1}" -f $s.StatementId, $s.StatementText) -ForegroundColor Gray
-      $cardinalityIssues |
-        Where-Object { $_.StatementId -eq $s.StatementId } |
-        Sort-Object Severity -Descending |
-        Select-Object -First 3 `
-          @{n='NodeId';e={$_.NodeId}},
-          @{n='PhysicalOp';e={$_.PhysicalOp}},
-          @{n='EstRows';e={F0 $_.EstRows}},
-          @{n='ActRows';e={F0 $_.ActRows}},
-          @{n='Ratio';e={ if ($_.Ratio -eq [double]::PositiveInfinity) { "inf" } else { F3 $_.Ratio } }},
-          @{n='LikelyContributors';e={$_.LikelyContributors}},
-          @{n='Predicate';e={$_.Predicate}},
-          @{n='SeekPredicate';e={$_.SeekPredicate}},
-          @{n='Residual';e={$_.Residual}} |
-        Format-List
+
+Write-Host "CE details (top 5 statements, top 3 nodes each):" -ForegroundColor DarkYellow
+Write-Host "  (ActRowsOut = trusted output rows where meaningful; ActRowsWork = summed worker rows)" -ForegroundColor DarkGray
+foreach ($stmt in ($result.CEStatementSummary | Select-Object -First 5)) {
+  $isChosen = ($chosenStmtSummary -and $stmt.StatementId -eq $chosenStmtSummary.StatementId)
+  if ($isChosen) {
+    Write-Host ("StatementId {0}" -f $stmt.StatementId) -ForegroundColor Gray
+  } else {
+    Write-Host ("StatementId {0}: {1}" -f $stmt.StatementId, $stmt.StatementText) -ForegroundColor Gray
+  }
+
+  # De-dupe repeated detail lines (e.g., same predicate repeated on Top/Parallelism above the real scan/seek)
+  $seen = @{}
+
+  function Write-Once([string]$label, [string]$value) {
+    if ([string]::IsNullOrWhiteSpace($value)) { return }
+    $k = "$label|$value"
+    if (-not $seen.ContainsKey($k)) {
+      Write-Host ("{0,-18}: {1}" -f $label, $value)
+      $seen[$k] = $true
     }
+  }
+
+  $top = $cardinalityIssues |
+    Where-Object { $_.StatementId -eq $stmt.StatementId } |
+    Sort-Object Severity -Descending |
+    Select-Object -First 3 |
+    Sort-Object NodeId -Unique  # safety: avoid duplicate NodeIds
+
+  foreach ($n in $top) {
+    Write-Host ""
+    Write-Host ("NodeId             : {0}" -f $n.NodeId)
+    Write-Host ("PhysicalOp         : {0}" -f $n.PhysicalOp)
+    Write-Host ("EstRows            : {0}" -f (F0 $n.EstRows))
+    $actOutTxt  = if ($n.ActRowsOut -ne $null -and $n.ActRowsOut -ne '') { F0 $n.ActRowsOut } else { 'n/a' }
+    $actWorkTxt = if ($n.ActRowsWork -ne $null -and $n.ActRowsWork -ne '') { F0 $n.ActRowsWork } else { 'n/a' }
+    Write-Host ("ActRowsOut         : {0}" -f $actOutTxt)
+    Write-Host ("ActRowsWork        : {0}" -f $actWorkTxt)
+
+    # For parallel operators where output rows aren't a single counter, show per-thread ActualRows (readable + obvious)
+    if ($n.ThreadRows -and @($n.ThreadRows).Count -gt 1) {
+      $workers = $n.ThreadRows | Where-Object { $_.Thread -ne 0 }
+      $wCount = @($workers).Count
+      if ($wCount -gt 0) {
+        $m = $workers | Measure-Object -Property ActualRows -Minimum -Maximum -Average
+        $min = [double]$m.Minimum; $max = [double]$m.Maximum; $avg = [double]$m.Average
+        $skew = if ($avg -gt 0) { F2 ($max / $avg) } else { 'n/a' }
+        Write-Host ("Threads            : {0} workers (min={1}, avg={2}, max={3}, max/avg={4})" -f $wCount, (F0 $min), (F0 $avg), (F0 $max), $skew)
+
+        # Compact per-thread list: show up to 8 busiest threads
+        $topThr = $workers | Sort-Object ActualRows -Descending | Select-Object -First 8
+        $pairs = @()
+        foreach ($tr in $topThr) { $pairs += ("t{0}={1}" -f $tr.Thread, (F0 $tr.ActualRows)) }
+        $more = $wCount - @($topThr).Count
+        $suffix = if ($more -gt 0) { " ... +$more more" } else { "" }
+        Write-Host ("PerThreadRows      : {0}{1}" -f ($pairs -join "  "), $suffix)
+      }
+    }
+
+    $ratioOutTxt  = if ($n.ActRowsOut -ne $null -and $n.EstRows -ne $null -and [double]$n.EstRows -ne 0) { F3 (([double]$n.ActRowsOut)/([double]$n.EstRows)) } else { 'n/a' }
+    $ratioWorkTxt = if ($n.ActRowsWork -ne $null -and $n.EstRows -ne $null -and [double]$n.EstRows -ne 0) { F3 (([double]$n.ActRowsWork)/([double]$n.EstRows)) } else { 'n/a' }
+    Write-Host ("RatioOut           : {0}" -f $ratioOutTxt)
+    Write-Host ("RatioWork          : {0}" -f $ratioWorkTxt)
+
+    if (-not [string]::IsNullOrWhiteSpace($n.LikelyContributors)) {
+      Write-Host ("LikelyContributors : {0}" -f $n.LikelyContributors)
+    }
+
+    # Print predicates where they are most meaningful, and avoid repeated noise.
+    $isAccess = ($n.PhysicalOp -match "Scan|Seek|Lookup")
+    $isFilter = ($n.PhysicalOp -match "^Filter$")
+    $isJoin   = ($n.PhysicalOp -match "Nested Loops|Hash Match|Merge Join")
+
+    if ($isAccess) {
+      Write-Once "SeekPredicate" $n.SeekPredicate
+      # Prefer Residual for scans/seeks; only show Predicate if it's distinct
+      Write-Once "Residual" $n.Residual
+      if (-not [string]::IsNullOrWhiteSpace($n.Predicate) -and $n.Predicate -ne $n.Residual) {
+        Write-Once "Predicate" $n.Predicate
+      }
+    }
+    elseif ($isFilter) {
+      Write-Once "Predicate" $n.Predicate
+    }
+    elseif ($isJoin) {
+      Write-Once "JoinPredicate" $n.JoinPredicate
+    }
+    # else: skip Predicate fields for wrapper ops (Top / Parallelism / etc.) to avoid duplication
+  }
+
+  Write-Host ""
+}
   }
 
   if ($result.Suggestions.Count -gt 0) {
