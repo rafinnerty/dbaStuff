@@ -1,0 +1,200 @@
+SQL Server Permissions to Spreadsheet (PowerShell)
+
+A comprehensive PowerShell auditing script that enumerates SQL Server instance-level and database-level permissions across one or more SQL Server instances and exports the results to a structured Excel workbook.
+
+Built for DBAs who need clear, repeatable visibility into:
+
+Who has access
+
+What roles they belong to
+
+What permissions are granted
+
+Which principals are system vs human
+
+AD-enriched identity details
+
+Why This Exists
+
+Permissions drift happens.
+
+Over time:
+
+Access gets granted and never reviewed
+
+AD groups change
+
+Service accounts accumulate privileges
+
+Auditors ask uncomfortable questions
+
+This script provides a consistent, exportable view of effective permissions across instances and databases, suitable for review, audit, or governance.
+
+What It Does
+
+For each SQL Server instance supplied, the script:
+
+1️⃣ Instance-Level Permissions
+
+Enumerates server roles (e.g., sysadmin)
+
+Captures login membership
+
+Identifies internal/system logins dynamically
+
+2️⃣ Database-Level Permissions
+
+Enumerates:
+
+Database users
+
+Database role memberships
+
+Explicit object permissions
+
+Includes object type (DATABASE, TABLE, PROCEDURE, VIEW, etc.)
+
+Includes permission state (GRANT / DENY)
+
+3️⃣ Dynamic System Principal Detection
+
+Instead of relying on a static list, the script uses T-SQL metadata to detect system/internal principals:
+
+NT SERVICE / NT AUTHORITY / BUILTIN
+
+## internal SQL logins
+
+Certificate/asymmetric key-mapped principals
+
+Built-in database users (dbo, guest, etc.)
+
+Feature-created users (e.g., MS_DataCollectorInternalUser)
+
+System principals are automatically labelled:
+
+User Type = System
+
+4️⃣ Active Directory Enrichment
+
+For Windows logins, the script:
+
+Resolves the AD user or group
+
+Populates:
+
+AD Name (Display Name)
+
+SamAccountName
+
+Leaves system/internal accounts untouched
+
+5️⃣ Clean Excel Output
+
+Outputs a timestamped Excel workbook with:
+
+Auto-sized columns
+
+Filters enabled
+
+Structured worksheets
+
+Separate instance-level and database-level sheets
+
+Automatic cleanup of files older than 90 days
+
+Parameters
+Parameter	Description
+-Instances	Array of SQL instances
+-InstancesFile	Text file containing instance names
+-OutputDir	Output folder (defaults to Documents)
+-AdDomainPrefix	AD domain prefix (e.g. DB)
+-IncludeSystemLogins	Include NT/BUILTIN/system logins
+-IncludePolicyLogins	Include SQL internal policy logins
+-IncludeBlankLogins	Include blank/mapped-less principals
+-ExcludedLogins	Logins to exclude
+-ExcludedDbUsersCsv	Comma-separated list of DB users to exclude
+Example Usage
+Basic Run
+.\sqlServerPermisisonsToSpreadsheet.ps1
+
+With Instance File
+.\sqlServerPermisisonsToSpreadsheet.ps1 `
+  -InstancesFile "C:\DBA\instances.txt"
+
+Exclude Specific DB Users
+.\sqlServerPermisisonsToSpreadsheet.ps1 `
+  -ExcludedDbUsersCsv "MS_DataCollectorInternalUser,guest"
+
+Include System Logins
+.\sqlServerPermisisonsToSpreadsheet.ps1 `
+  -IncludeSystemLogins
+
+Requirements
+
+PowerShell 5+
+
+dbatools module
+
+ActiveDirectory module (for AD enrichment)
+
+sysadmin access on target instances
+
+Install required modules:
+
+Install-Module dbatools
+Install-Module ActiveDirectory
+
+Output Structure
+Columns Include
+
+Principal Source
+
+Instance Name
+
+Database Name
+
+User Type
+
+Database User Name
+
+Login Name
+
+AD Name
+
+SamAccountName
+
+Role
+
+Permission Type
+
+Permission State
+
+Object Type
+
+Object Schema
+
+Object Name
+
+Timestamp
+
+Intended Use
+
+Quarterly access reviews
+
+Audit preparation
+
+Security hardening
+
+Privilege drift detection
+
+Baselining environments
+
+Comparing DEV vs PROD permissions
+
+Notes
+
+Script requires sysadmin on target instances.
+
+AD enrichment requires appropriate domain query permissions.
+
+System detection is metadata-driven and version-aware.
