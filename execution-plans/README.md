@@ -31,12 +31,12 @@ git clone https://github.com/rafinnerty/dbaStuff.git
 cd dbaStuff
 
 \# Or just download the script:
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/rafinnerty/dbaStuff/main/Get-SqlPlanInsights.ps1" -OutFile "Get-SqlPlanInsights.ps1"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/rafinnerty/dbaStuff/main/executionPlanReport.v2.ps1" -OutFile "executionPlanReport.v2.ps1"
 
 ### **2\. Run Your First Analysis**
 
 \# Source the function into your session
-. .\\Get-SqlPlanInsights.ps1
+. .\\executionPlanReport.v2.ps1
 
 \# Analyze a saved execution plan
 Get-SqlPlanInsights -Path "C:\\temp\\slow\_query.sqlplan"
