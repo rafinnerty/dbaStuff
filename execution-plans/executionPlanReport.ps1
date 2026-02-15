@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
   Parse SQL Server ShowPlan XML (.sqlplan / .xml) and output performance insights.
+  SUPERSEDED BY executionPlanReport.v2.ps1
 
 .USAGE
   . .\Get-SqlPlanInsights.ps1
