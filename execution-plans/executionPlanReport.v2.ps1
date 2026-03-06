@@ -2250,13 +2250,15 @@ if ($mismatches) {
     Write-Host "Significant Cardinality Estimate Mismatches Detected:" -ForegroundColor Yellow
     $mismatches | Format-Table -AutoSize
 }
-else { Write-Host "No Cardinality Estimate Mismatches Detected" -ForegroundColor DarkGray}
+else { Write-Host ""
+       Write-Host "No Cardinality Estimate Mismatches Detected" -ForegroundColor Yellow}
 
   $dopPlannedText = if ($dop -ne $null -and $dop -gt 0) { $dop } else { "n/a" }
   $dopObservedText = if ($dopObserved -ne $null -and $dopObserved -gt 0) { $dopObserved } else { "n/a" }
   $dopParText = if ($dopObservedParallelism -ne $null -and $dopObservedParallelism -gt 0) { $dopObservedParallelism } else { "n/a" }
   $dopMaxText = if ($dopObservedMaxRuntime -ne $null -and $dopObservedMaxRuntime -gt 0) { $dopObservedMaxRuntime } else { "n/a" }
 
+  Write-Host ""
   Write-Host ("DOP: planned={0} observed={1} (parallelism={2} maxRuntime={3})" -f $dopPlannedText,$dopObservedText,$dopParText,$dopMaxText)
 
 
