@@ -2238,10 +2238,25 @@ if (-not $covered) {
     Write-Host ("SanityCheck: missingIndexGroups={0}, missingIndexes={1}, links={2}" -f `
          (@($missingIndexGroups).Count),(@($missingIndexes).Count),($referenceLinks.PSObject.Properties.Count)) -ForegroundColor DarkCyan
   }
+
+$mismatches = $operatorRows | Where-Object { 
+    $_.ActRows -ne $null -and 
+    $_.Ratio -gt $CEMismatchRatio -and 
+    $_.ActRows -gt $CEMinRows 
+} | Select-Object NodeId, PhysicalOp, EstRows, ActRows, Ratio, Object | Sort-Object Ratio -Descending
+
+if ($mismatches) {
+    Write-Host ""
+    Write-Host "Significant Cardinality Estimate Mismatches Detected:" -ForegroundColor Yellow
+    $mismatches | Format-Table -AutoSize
+}
+else { Write-Host "No Cardinality Estimate Mismatches Detected" -ForegroundColor DarkGray}
+
   $dopPlannedText = if ($dop -ne $null -and $dop -gt 0) { $dop } else { "n/a" }
   $dopObservedText = if ($dopObserved -ne $null -and $dopObserved -gt 0) { $dopObserved } else { "n/a" }
   $dopParText = if ($dopObservedParallelism -ne $null -and $dopObservedParallelism -gt 0) { $dopObservedParallelism } else { "n/a" }
   $dopMaxText = if ($dopObservedMaxRuntime -ne $null -and $dopObservedMaxRuntime -gt 0) { $dopObservedMaxRuntime } else { "n/a" }
+
   Write-Host ("DOP: planned={0} observed={1} (parallelism={2} maxRuntime={3})" -f $dopPlannedText,$dopObservedText,$dopParText,$dopMaxText)
 
 
@@ -2263,6 +2278,7 @@ if (-not $covered) {
       (F3orNA $memoryGrantInfo.GrantWaitMS),
       $mgFeedback) -ForegroundColor DarkCyan
 
+    Write-Host ""
     # Memory grant analysis (heuristic)
     $mgGranted = $null; $mgMaxUsed = $null
     try { $mgGranted = [double]$memoryGrantInfo.GrantedKB } catch {}
@@ -2310,7 +2326,6 @@ if (-not $covered) {
   @{ n = 'Warnings'; e = { $_.Warnings } } |
   Format-Table -AutoSize
 
-  Write-Host ""
   Write-Host ""
   Write-Host "Top operators by EstimatedSelfCost (delta):" -ForegroundColor Yellow
 
