@@ -2253,6 +2253,28 @@ if ($mismatches) {
 else { Write-Host ""
        Write-Host "No Cardinality Estimate Mismatches Detected" -ForegroundColor Yellow}
 
+# wait stats
+$waitNodes = $xml.SelectNodes("//sp:WaitStats/sp:Wait", $nsm)
+$waitStatsReport = @()
+
+if ($waitNodes.Count -gt 0) {
+    foreach ($w in $waitNodes) {
+        $waitStatsReport += [pscustomobject]@{
+            WaitType    = $w.GetAttribute("WaitType")
+            WaitTimeMs  = [double]$w.GetAttribute("WaitTimeMs")
+            WaitCount   = [int]$w.GetAttribute("WaitCount")
+            AvgWaitMs   = [math]::Round(([double]$w.GetAttribute("WaitTimeMs") / [int]$w.GetAttribute("WaitCount")), 3)
+        }
+    }
+    
+    # Sort by longest wait time
+    $waitStatsReport = $waitStatsReport | Sort-Object WaitTimeMs -Descending
+
+    Write-Host ""
+    Write-Host "Query Wait Statistics (Actual Plan Only):" -ForegroundColor Yellow
+    $waitStatsReport | Format-Table -AutoSize
+}
+
   $dopPlannedText = if ($dop -ne $null -and $dop -gt 0) { $dop } else { "n/a" }
   $dopObservedText = if ($dopObserved -ne $null -and $dopObserved -gt 0) { $dopObserved } else { "n/a" }
   $dopParText = if ($dopObservedParallelism -ne $null -and $dopObservedParallelism -gt 0) { $dopObservedParallelism } else { "n/a" }
