@@ -1,5 +1,5 @@
 <#
-    Name:           sqlServerPermisisonsToSpreadsheet.ps1
+    Name:           sqlServerPermissionsToSpreadsheet.ps1
     Written by:     Richard Armstrong-Finnerty richard.armstrong.finnerty@gmail.com & ChatGPT
     Version:        1.1
     Date:           08-FEB-2026
@@ -71,7 +71,7 @@ Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 if (-not (Test-Path -LiteralPath $OutputDir)) { New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null }
 
 # Spreadsheet path.
-$path = (Join-Path $OutputDir "sqlServerPermissions_$excelSheetNametimestamp.xlsx")
+$path = (Join-Path $OutputDir "sqlServersions_$excelSheetNametimestamp.xlsx")
 
 # Resolve instances
 if ($Instances -and $Instances.Count -gt 0) {
@@ -83,10 +83,10 @@ if ($Instances -and $Instances.Count -gt 0) {
     $instances = Get-Content -LiteralPath $InstancesFile | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith("#") }
 }
 
-# initialize array that holds PS objects for instance-level permissions details
+# initialize array that holds PS objects for instance-level sions details
 $instanceArray  = @()
 
-# initialize array that holds PS objects for database-permissions details
+# initialize array that holds PS objects for database-sions details
 $dbArray        = @()
  
 # initialize hash table that holds AD names
@@ -174,10 +174,10 @@ $instanceRoles = (Get-DbaServerRole -SqlInstance $instance) | Sort-Object name -
 # Get databases for this instance - avoid inaccessible ones.
 $databases = Get-DbaDatabase -SqlInstance $instance -Status Normal| Sort-Object Name
 
-    # Loop through the databases and get permissions.
+    # Loop through the databases and get sions.
     foreach ($database in $databases)
     {
-    # Database-level permissions T-SQL
+    # Database-level sions T-SQL
     $tSql =
     "
     SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
@@ -213,8 +213,8 @@ $databases = Get-DbaDatabase -SqlInstance $instance -Status Normal| Sort-Object 
             [Login Name]        = ulogin.[name],
             [AD Name]           = '',
             [Role]              = NULL,
-            [Permission Type]   = perm.[permission_name],
-            [Permission State]  = perm.[state_desc],
+            [sion Type]   = perm.[sion_name],
+            [sion State]  = perm.[state_desc],
             [Object Type] = CASE perm.[class]
                                WHEN 1 THEN obj.[type_desc]        -- Schema-contained objects
                                ELSE perm.[class_desc]             -- Higher-level objects
@@ -231,8 +231,8 @@ $databases = Get-DbaDatabase -SqlInstance $instance -Status Normal| Sort-Object 
             sys.database_principals            AS princ
             --Login accounts
             LEFT JOIN sys.server_principals    AS ulogin    ON ulogin.[sid] = princ.[sid]
-            --Permissions
-            LEFT JOIN sys.database_permissions AS perm      ON perm.[grantee_principal_id] = princ.[principal_id]
+            --sions
+            LEFT JOIN sys.database_sions AS perm      ON perm.[grantee_principal_id] = princ.[principal_id]
             LEFT JOIN sys.schemas              AS permschem ON permschem.[schema_id] = perm.[major_id]
             LEFT JOIN sys.objects              AS obj       ON obj.[object_id] = perm.[major_id]
             LEFT JOIN sys.schemas              AS objschem  ON objschem.[schema_id] = obj.[schema_id]
@@ -260,8 +260,8 @@ $databases = Get-DbaDatabase -SqlInstance $instance -Status Normal| Sort-Object 
             [Login Name]        = ulogin.[name],
             [AD Name]           = '',
             [Role]              = roleprinc.[name],
-            [Permission Type]   = perm.[permission_name],
-            [Permission State]  = perm.[state_desc],
+            [sion Type]   = perm.[sion_name],
+            [sion State]  = perm.[state_desc],
             [Object Type] = CASE perm.[class]
                                WHEN 1 THEN obj.[type_desc]        -- Schema-contained objects
                                ELSE perm.[class_desc]             -- Higher-level objects
@@ -283,8 +283,8 @@ $databases = Get-DbaDatabase -SqlInstance $instance -Status Normal| Sort-Object 
             JOIN      sys.database_principals  AS membprinc ON membprinc.[principal_id] = members.[member_principal_id]
             --Login accounts
             LEFT JOIN sys.server_principals    AS ulogin    ON ulogin.[sid] = membprinc.[sid]
-            --Permissions
-            LEFT JOIN sys.database_permissions AS perm      ON perm.[grantee_principal_id] = roleprinc.[principal_id]
+            --sions
+            LEFT JOIN sys.database_sions AS perm      ON perm.[grantee_principal_id] = roleprinc.[principal_id]
             LEFT JOIN sys.schemas              AS permschem ON permschem.[schema_id] = perm.[major_id]
             LEFT JOIN sys.objects              AS obj       ON obj.[object_id] = perm.[major_id]
             LEFT JOIN sys.schemas              AS objschem  ON objschem.[schema_id] = obj.[schema_id]
@@ -308,8 +308,8 @@ $databases = Get-DbaDatabase -SqlInstance $instance -Status Normal| Sort-Object 
             [Login Name]        = '{All Users}',
             [AD Name]           = '',
             [Role]              = roleprinc.[name],
-            [Permission Type]   = perm.[permission_name],
-            [Permission State]  = perm.[state_desc],
+            [sion Type]   = perm.[sion_name],
+            [sion State]  = perm.[state_desc],
             [Object Type] = CASE perm.[class]
                                WHEN 1 THEN obj.[type_desc]        -- Schema-contained objects
                                ELSE perm.[class_desc]             -- Higher-level objects
@@ -324,7 +324,7 @@ $databases = Get-DbaDatabase -SqlInstance $instance -Status Normal| Sort-Object 
         FROM
             --Roles
             sys.database_principals            AS roleprinc
-            --Role permissions
+            --Role sions
             LEFT JOIN sys.database_permissions AS perm      ON perm.[grantee_principal_id] = roleprinc.[principal_id]
             LEFT JOIN sys.schemas              AS permschem ON permschem.[schema_id] = perm.[major_id]
             --All objects
