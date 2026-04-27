@@ -12,18 +12,13 @@
   1. Offline File Parsing: Analyze a static .xml or .sqlplan file.
   2. Telemetry & Regression Detection: Connect to the database to append real-time Query Store 
      metrics to the analysis, and automatically generate plan-forcing scripts if regressions are found.
-  3. The Auto-Harvester: Bypass files entirely. The script queries the target database's Query Store 
-     for the highest CPU-consuming queries, extracts their plans into memory, and audits all of them.
-
+ 
 .USAGE
   # MODE 1: Standard File Analysis
   Get-SqlPlanInsights -Path ".\Execution plan.xml"
 
   # MODE 2: File Analysis + Query Store Telemetry + Missing Index DB Check
   Get-SqlPlanInsights -Path ".\Execution plan.xml" -ServerInstance "PROD-SQL-01" -Database "StackOverflow2013" -InspectDatabase
-
-  # MODE 3: The Auto-Harvester (Analyze Top 5 CPU Queries from the last 24 hours)
-  Get-SqlPlanInsights -ServerInstance "PROD-SQL-01" -Database "StackOverflow2013" -TopCPU 5
 
   # AUTHENTICATION: Using SQL Server Authentication (uses dbatools)
   $cred = Get-Credential
