@@ -1,7 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  Parse SQL Server ShowPlan XML (.sqlplan / .xml) and output advanced performance insights, 
-  or automatically harvest and analyze the worst CPU-burning queries directly from Query Store.
+  Parse SQL Server ShowPlan XML (.sqlplan / .xml) and output advanced performance insights.
 
 .DESCRIPTION
   This script acts as an automated query tuning consultant. It parses execution plans to identify 
