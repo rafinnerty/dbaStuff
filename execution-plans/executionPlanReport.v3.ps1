@@ -7,7 +7,7 @@
   Cardinality Estimation (CE) mismatches, TempDB spills, SARGability violations, implicit conversions, 
   and parameter sniffing risks. 
 
-  It features three primary modes of operation:
+  It features 2 primary modes of operation:
   1. Offline File Parsing: Analyze a static .xml or .sqlplan file.
   2. Telemetry & Regression Detection: Connect to the database to append real-time Query Store 
      metrics to the analysis, and automatically generate plan-forcing scripts if regressions are found.
