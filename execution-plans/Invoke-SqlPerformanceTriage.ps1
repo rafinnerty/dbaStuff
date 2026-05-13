@@ -12,7 +12,7 @@
 .REQUIREMENTS
   - dbatools PowerShell module
   - sp_whoisactive installed on the target instance (master or user DB)
-  - executionPlanReport.v3.ps1--SUPERSEDED BY V4 available in the same directory
+  - executionPlanReport.v3.ps1 available in the same directory
 
 .EXAMPLE
   .\Invoke-SqlPerformanceTriage.ps1 -SqlInstance "PROD-SQL-01" -Database "StackOverflow" -MinDurationSeconds 10
@@ -23,7 +23,7 @@ param(
     [Parameter(Mandatory=$true)][string]$Database,
     [int]$MinDurationSeconds = 5,
     [int]$TopQueryStoreQueries = 3,
-    [string]$InsightsScriptPath = ".\Get-SqlPlanInsights.ps1",
+    [string]$InsightsScriptPath = ".\executionPlanReport.v3.ps1--SUPERSEDED BY V4.ps1",
     [pscredential]$SqlCredential
 )
 
@@ -56,19 +56,30 @@ $analyzedPlans = @()
 # ============================================================================
 # PHASE 1: Live Engine Diagnostics (sp_whoisactive)
 # ============================================================================
-# ============================================================================
-# PHASE 1: Live Engine Diagnostics (sp_whoisactive)
-# ============================================================================
 Write-Host "[*] Phase 1: Polling live engine via sp_whoisactive (Waits, Locks, Plans)..." -ForegroundColor Yellow
 
 # Execute directly. No temp tables, no dynamic SQL, no swallowed result sets.
 $whoIsActiveQuery = "EXEC master..sp_whoisactive @get_transaction_info = 1, @get_task_info = 2, @get_locks = 1, @get_plans = 1;"
-
 try {
     # 1. Fetch ALL live activity directly into PowerShell objects
     $allLiveQueries = @(Invoke-DbaQuery @connectParams -Query $whoIsActiveQuery -WarningAction SilentlyContinue)
     
-    # 2. Filter mathematically in PowerShell using the native SQL Server timestamps
+    # --- X-RAY DEBUG BLOCK ---
+    Write-Host "     sp_whoisactive returned $($allLiveQueries.Count) active sessions." -ForegroundColor DarkCyan
+    foreach ($q in $allLiveQueries) {
+        $dur = if ($null -ne $q.start_time -and $null -ne $q.collection_time) { 
+            ($q.collection_time - $q.start_time).TotalSeconds 
+        } else { -1 }
+        
+        $sqlSnippet = if (-not [string]::IsNullOrWhiteSpace($q.sql_text)) { 
+            $q.sql_text.Substring(0, [math]::Min($q.sql_text.Length, 40)) -replace "`n|`r"," " 
+        } else { "NULL" }
+        
+        Write-Host "    SPID: $($q.session_id) | Calc_Dur: $($dur)s | SQL: $sqlSnippet" -ForegroundColor DarkCyan
+    }
+    # -------------------------
+
+    # 2. Filter mathematically in PowerShell
     $liveQueries = @($allLiveQueries | Where-Object {
         $null -ne $_.start_time -and $null -ne $_.collection_time -and 
         ($_.collection_time - $_.start_time).TotalSeconds -ge $MinDurationSeconds
@@ -80,7 +91,6 @@ try {
         foreach ($lq in $liveQueries) {
             Write-Host "    -> [SPID: $($lq.session_id)] Wait Info: $($lq.wait_info) | Blocking SPID: $($lq.blocking_session_id)" -ForegroundColor DarkGray
             
-            # Export the live execution plan
             if ($null -ne $lq.query_plan -and $lq.query_plan -ne '') {
                 $planPath = Join-Path $tempDir "LivePlan_SPID_$($lq.session_id)_$(Get-Date -Format 'HHmmss').sqlplan"
                 $lq.query_plan | Out-File -FilePath $planPath -Encoding utf8
