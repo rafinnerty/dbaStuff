@@ -35,6 +35,8 @@
   - Requires the 'dbatools' module if connecting to a database for Telemetry/Harvesting.
   - Missing Index suggestions are intelligently merged to prevent bloat.
   - Parameter Sniffing test scripts (OPTION RECOMPILE, OPTIMIZE FOR) are automatically generated.
+
+  License: MIT. See LICENCE in dbastuff folder - https://github.com/rafinnerty/dbaStuff
 #>
 
 function Get-SqlPlanInsights {
