@@ -12,6 +12,8 @@
                     Spreadsheet is auto-width and has filters on every column.
     Notes:          Requires sysadmin role membership on all instances in $instances list.
                     The clever T-SQL was lifted from StackExchange: https://dba.stackexchange.com/questions/36618/list-all-permissions-for-a-given-role
+
+					License: MIT. See LICENCE in dbastuff folder - https://github.com/rafinnerty/dbaStuff
 #>
 
  
