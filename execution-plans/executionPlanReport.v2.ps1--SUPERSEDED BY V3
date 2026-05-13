@@ -22,6 +22,8 @@
   Works with Estimated and Actual plans.
   Missing Index suggestions are taken from plan XML (even if SSMS doesn't show the green banner).
   All numeric output is formatted to 3 decimal places for alignment/readability.
+
+  License: MIT. See LICENCE in dbastuff folder - https://github.com/rafinnerty/dbaStuff
 #>
 
 function Get-SqlPlanInsights {
