@@ -9,6 +9,8 @@
   Phase 2: Recent History via Query Store (captures top CPU/IO consumers from the last 1 hour).
   Phase 3: Deep Heuristic Analysis (extracts the XML plans from Phase 1 & 2 and feeds them into Get-SqlPlanInsights).
 
+  License: MIT. See LICENCE in dbastuff folder - https://github.com/rafinnerty/dbaStuff
+
 .REQUIREMENTS
   - dbatools PowerShell module
   - sp_whoisactive installed on the target instance (master or user DB)
