@@ -34,6 +34,7 @@
   - Requires the 'dbatools' module if connecting to a database for Telemetry/Harvesting.
   - Missing Index suggestions are intelligently merged to prevent bloat.
   - Parameter Sniffing test scripts (OPTION RECOMPILE, OPTIMIZE FOR) are automatically generated.
+  - AI was used A LOT to create this script - resistance is futile, etc.
 
 # -----------------------------
 # CE Severity Scoring (v6 — revised per Joe Chang feedback)
