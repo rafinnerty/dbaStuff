@@ -102,7 +102,7 @@ function Get-SqlPlanInsights {
     [switch]$DebugSargability
   )
 
-  Write-Output 'v5'
+  Write-Output 'v6'
 
   if ([string]::IsNullOrWhiteSpace($Path)) {
     throw "No plan file specified. Use -Path to supply a .sqlplan or .xml file."
