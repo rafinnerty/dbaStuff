@@ -1,9 +1,9 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Moves all rowstore tables, heaps, and indexes in a single database onto a target
-    filegroup - including LOB/BLOB (TEXTIMAGE / LOB_DATA) data - while preserving
-    constraints (PK / UNIQUE / FK / CHECK / DEFAULT).
+    Shrink rowstore tables, heaps, and indexes in a single database by moving them to a new filegroup, 
+    including LOB/BLOB (TEXTIMAGE / LOB_DATA) data.
+    Preserves constraints (PK / UNIQUE / FK / CHECK / DEFAULT).
 
 .DESCRIPTION
     For each user table the script generates (and optionally executes) the correct DDL:
@@ -74,12 +74,12 @@
 
 .EXAMPLE
     # Dry run - generate a reviewable script, change nothing:
-    .\Move-DbObjectsToFileGroup.ps1 -SqlInstance SQL01 -Database Sales `
+    .\shrinkDbObjects.ps1 -SqlInstance SQL01 -Database Sales `
         -TargetFileGroup DATA_FG2 -OutputScriptPath .\move_sales.sql
 
 .EXAMPLE
     # Execute, forcing PAGE compression, online:
-    .\Move-DbObjectsToFileGroup.ps1 -SqlInstance SQL01 -Database Sales `
+    .\shrinkDbObjects.ps1 -SqlInstance SQL01 -Database Sales `
         -TargetFileGroup DATA_FG2 -Compression Page -Online -Execute
 
 .NOTES
