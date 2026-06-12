@@ -1,12 +1,9 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Shrink rowstore tables, heaps, and indexes in a single database by moving them to a new filegroup, 
-    including LOB/BLOB (TEXTIMAGE / LOB_DATA) data.
+    Shrink rowstore tables, heaps, and indexes in a single database. 
+    Moves objects onto a target filegroup - including LOB/BLOB (TEXTIMAGE / LOB_DATA) data.
     Preserves constraints (PK / UNIQUE / FK / CHECK / DEFAULT).
-    
-    Disclaimer: Provided as-is and used at your own risk.
-    Test it, test it again, and please do not run this in production without verifying it in a lower environment first!
 
 .DESCRIPTION
     For each user table the script generates (and optionally executes) the correct DDL:
@@ -119,7 +116,8 @@ param(
     [int]      $NewFileGrowthMB = 256,
     [switch]   $ReportOnly,             # classify + size every object; emit no DDL
     [string]   $ReportCsvPath,          # optional: export the per-object report to CSV
-    [switch]   $IncludeColumnstore      # also relocate clustered/nonclustered columnstore indexes
+    [switch]   $IncludeColumnstore,
+    [switch]   $LogToScreen             # also relocate clustered/nonclustered columnstore indexes
 )
 
 $ErrorActionPreference = 'Stop'
@@ -573,6 +571,10 @@ foreach ($t in $tables) {
     $full       = "$schemaName.$tableName"
     $qFull      = (Quote-Name $schemaName) + '.' + (Quote-Name $tableName)
     $objId      = [int]$t.ObjectId
+
+    if ($LogToScreen) {
+        Write-Host "Evaluating object: $full ..." -ForegroundColor Cyan
+    }
 
     if ($Schema -and ($Schema -notcontains $schemaName)) { continue }
     if ($ExcludeTable -and ($ExcludeTable -contains $full)) { continue }
