@@ -3,70 +3,91 @@
   Parse SQL Server ShowPlan XML (.sqlplan / .xml) and output advanced performance insights.
 
 .DESCRIPTION
-  This script acts as an automated query tuning consultant. It parses execution plans to identify 
-  Cardinality Estimation (CE) mismatches, TempDB spills, SARGability violations, implicit conversions, 
-  and parameter sniffing risks. 
+  Get-SqlPlanInsights acts as an automated query tuning consultant. It parses execution
+  plans to identify Cardinality Estimation (CE) mismatches, TempDB spills, SARGability
+  violations, implicit conversions, and parameter sniffing risks.
 
-  It features 2 primary modes of operation:
-  1. Offline File Parsing: Analyze a static .xml or .sqlplan file.
-  2. Telemetry & Regression Detection: Connect to the database to append real-time Query Store 
-     metrics to the analysis, and automatically generate plan-forcing scripts if regressions are found.
- 
-.USAGE
-  # MODE 1: Standard File Analysis
+  Two primary modes of operation:
+    1. Offline File Parsing   - Analyze a static .xml or .sqlplan file.
+    2. Telemetry & Regression - Connect to the database to append real-time Query Store
+                                metrics to the analysis, and automatically generate
+                                plan-forcing scripts if regressions are found.
+
+.PARAMETER Path
+  Path to the .sqlplan or .xml execution plan file to analyze.
+
+.PARAMETER ServerInstance
+  Target SQL Server instance for optional Query Store telemetry / database inspection.
+
+.PARAMETER Database
+  Target database (required with -ServerInstance / -InspectDatabase).
+
+.PARAMETER InspectDatabase
+  Connect to the database to inspect existing indexes, statistics staleness, and
+  missing-index coverage. Requires -ServerInstance and -Database.
+
+.PARAMETER SqlCredential
+  PSCredential for SQL Server Authentication (passed through to dbatools).
+
+.PARAMETER ShowAllHeuristicMatches
+  List every matching operator for heuristic sections instead of deduplicated/grouped findings.
+
+.PARAMETER CEMismatchRatio
+  Cardinality estimate mismatch ratio threshold (default 10).
+
+.PARAMETER CEMinRows
+  Minimum row count before a CE mismatch is flagged (default 10).
+
+.EXAMPLE
   Get-SqlPlanInsights -Path ".\Execution plan.xml"
+  Standard offline file analysis.
 
-  # MODE 2: File Analysis + Query Store Telemetry + Missing Index DB Check
+.EXAMPLE
   Get-SqlPlanInsights -Path ".\Execution plan.xml" -ServerInstance "PROD-SQL-01" -Database "StackOverflow2013" -InspectDatabase
+  File analysis plus Query Store telemetry and a live missing-index / index coverage check.
 
-  # AUTHENTICATION: Using SQL Server Authentication (uses dbatools)
+.EXAMPLE
   $cred = Get-Credential
   Get-SqlPlanInsights -ServerInstance "192.168.1.195" -Database "StackOverflow" -SqlCredential $cred
+  Connect using SQL Server Authentication (via dbatools) instead of integrated security.
 
-  # MISC PARAMETERS:
-  # Show every matching operator for heuristic sections (instead of deduplicated/grouped findings):
+.EXAMPLE
   Get-SqlPlanInsights -Path ".\Execution plan.xml" -ShowAllHeuristicMatches
+  Show every matching operator for heuristic sections rather than grouped summaries.
 
-  # Tweak CE mismatch sensitivity (e.g., flag rows with > 5x ratio and minimum 50 rows):
+.EXAMPLE
   Get-SqlPlanInsights -Path ".\Execution plan.xml" -CEMismatchRatio 5 -CEMinRows 50
+  Tighten CE mismatch sensitivity: flag operators with a >5x estimate ratio and at least 50 rows.
 
 .NOTES
-  - Requires the 'dbatools' module if connecting to a database for Telemetry/Harvesting.
-  - Missing Index suggestions are intelligently merged to prevent bloat.
-  - Parameter Sniffing test scripts (OPTION RECOMPILE, OPTIMIZE FOR) are automatically generated.
+  - Requires the 'dbatools' module if connecting to a database for telemetry/inspection.
+  - Missing-index suggestions are intelligently merged to prevent bloat.
+  - Parameter sniffing test scripts (OPTION RECOMPILE, OPTIMIZE FOR) are auto-generated.
   - AI was used A LOT to create this script - resistance is futile, etc.
 
-# -----------------------------
-# CE Severity Scoring (v6 — revised per Joe Chang feedback)
-# -----------------------------
-# The predecessor used (1 + $estCost) as a severity multiplier. This was pointed out
-# by Joe Chang as fundamentally flawed: the optimizer's # cost model is page-weighted, 
-# not row-weighted. For the same number of rows touched, # actual CPU difference
-# between a fat clustered index scan and a narrow nonclustered # scan is modest — 
-# but estimated cost differs enormously due to page count ratio.
-# Using $estCost therefore injected the optimizer's own page bias into a metric
-# designed to critique the optimizer's decisions.
-#
-# v6 replaces this with a three-factor, runtime-evidence-only model:
-#
-#   $severity = $baseSeverity * ($cpuVolumeWeight + 1) * $wasteMultiplier
-#
-#   $baseSeverity    — log-scaled CE mismatch ratio × row magnitude. How badly did
-#                      the optimizer guess, and at what scale?
-#
-#   $cpuVolumeWeight — Log10($touchedRows + 1), where $touchedRows prefers RowsRead
-#                      (actual physical rows evaluated) over ActRows. Reflects true
-#                      CPU work independent of page cost.
-#
-#   $wasteMultiplier — 1 + Log10(RowsRead / ActRows). Penalises operators that scan
-#                      large numbers of rows through residual predicates but pass very
-#                      few. This is the "rows scanned not meeting predicates" signal
-#                      Joe specifically highlighted — a LIKE filter reading 24M rows
-#                      to return 52K scores proportionally higher than its page cost
-#                      would ever suggest.
-#
-# $estCost is not referenced anywhere in this formula. Severity is now entirely a
-# function of runtime evidence.
+  CE Severity Scoring (v6 — revised per Joe Chang feedback)
+  --------------------------------------------------------
+  The predecessor used (1 + $estCost) as a severity multiplier. Joe Chang pointed out this
+  was fundamentally flawed: the optimizer's cost model is page-weighted, not row-weighted.
+  For the same number of rows touched, actual CPU difference between a fat clustered index
+  scan and a narrow nonclustered scan is modest — but estimated cost differs enormously due
+  to page-count ratio. Using $estCost therefore injected the optimizer's own page bias into
+  a metric designed to critique the optimizer's decisions.
+
+  v6 replaces this with a three-factor, runtime-evidence-only model:
+
+      $severity = $baseSeverity * ($cpuVolumeWeight + 1) * $wasteMultiplier
+      $baseSeverity    - log-scaled CE mismatch ratio x row magnitude. How badly did the
+                         optimizer guess, and at what scale?
+      $cpuVolumeWeight - Log10($touchedRows + 1), where $touchedRows prefers RowsRead
+                         (actual physical rows evaluated) over ActRows. Reflects true CPU
+                         work independent of page cost.
+      $wasteMultiplier - 1 + Log10(RowsRead / ActRows). Penalises operators that scan large
+                         numbers of rows through residual predicates but pass very few — the
+                         "rows scanned not meeting predicates" signal Joe highlighted.
+
+  $estCost is not referenced anywhere in this formula. Severity is now entirely a function
+  of runtime evidence.
 #>
 
 function Get-SqlPlanInsights {
