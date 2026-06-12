@@ -4,6 +4,9 @@
     Shrink rowstore tables, heaps, and indexes in a single database by moving them to a new filegroup, 
     including LOB/BLOB (TEXTIMAGE / LOB_DATA) data.
     Preserves constraints (PK / UNIQUE / FK / CHECK / DEFAULT).
+    
+    Disclaimer: Provided as-is and used at your own risk.
+    Test it, test it again, and please do not run this in production without verifying it in a lower environment first!
 
 .DESCRIPTION
     For each user table the script generates (and optionally executes) the correct DDL:
