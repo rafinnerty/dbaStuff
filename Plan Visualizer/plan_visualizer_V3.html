@@ -726,7 +726,7 @@ function renderStmtBar(){
   bar.querySelectorAll('.stmt-chip').forEach(c=>c.addEventListener('click',()=>{selectStmt(PLAN.statements[+c.getAttribute('data-i')]);}));
 }
 
-/* ---------- analysis engine (ported from executionPlanReport_v6.ps1) ---------- */
+/* ---------- analysis engine (ported from executionPlanReport_v7.ps1) ---------- */
 const CE_RATIO=10, CE_MINROWS=10, LOOKUP_THRESHOLD=10000;
 const REF_LINKS=[
   ['Cardinality estimation (Microsoft)','https://learn.microsoft.com/en-us/sql/relational-databases/performance/cardinality-estimation-sql-server'],
@@ -996,7 +996,7 @@ function renderAnalysis(){
   const flagsTotal=a.ce.length+a.lookups.length+a.spills.length+a.skew.length+a.sarg.length+a.red.length+a.joins.length+a.pacs.length;
   let sub=a.hasRuntime?'<span style="color:var(--good)">actual plan — runtime evidence available</span>':'<span style="color:var(--warn)">estimated plan — runtime heuristics limited</span>';
   if(aug){const m=aug.meta;sub+=` · <span class="dbtag">augmented</span> ${m&&m.server?esc(m.server):''}${m&&m.database?' / '+esc(m.database):''}`;}
-  h+=`<div class="ahdr"><div><span class="atitle">Plan analysis</span> <span class="amuted">heuristics ported from executionPlanReport_v6.ps1</span></div>
+  h+=`<div class="ahdr"><div><span class="atitle">Plan analysis</span> <span class="amuted">heuristics ported from executionPlanReport_v7.ps1</span></div>
     <div class="amuted">${sub} · ${flagsTotal} signal${flagsTotal===1?'':'s'}</div></div>`;
 
   // live-database augmentation (rendered first — these are the sections the browser can't compute)
