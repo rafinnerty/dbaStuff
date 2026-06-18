@@ -44,9 +44,6 @@ Get-SqlPlanInsights `
 
 The bundle carries the plan XML *plus* the analyzer's findings, live index/statistics inventory, stale-stats candidates and Query Store regressions — so the visualiser's insights panel lights up with everything the engine found, all rendered locally.
 
-<!-- SCREENSHOT: a wide hero shot of the visualiser with a plan loaded and the insights panel open -->
-![Plan Visualizer — full view with insights panel](screenshots/visualizer - hero.png)
-
 ---
 
 ## Plan Visualizer (`plan_visualizer_V3.html`)
@@ -62,13 +59,6 @@ A single, dependency-free HTML file. Open it in any modern browser — no instal
 Get a plan out of SSMS with right-click → **Save Execution Plan As…**.
 
 **Everything runs locally — the page never connects to a database and nothing is uploaded.**
-
-<!-- SCREENSHOT: the operator diagram with a node selected and the detail panel showing -->
-![Operator diagram with node detail](screenshots/visualizer-diagram.png)
-
-<!-- SCREENSHOT: the insights panel showing spills / missing indexes / stale stats -->
-![Tuning insights panel](screenshots/visualizer-insights.png)
-
 ---
 
 ## Execution Plan Analyzer — `Get-SqlPlanInsights` (`executionPlanReport_v7.ps1`)
@@ -109,9 +99,6 @@ Get-SqlPlanInsights -Path ".\Execution plan.xml" -CEMismatchRatio 5 -CEMinRows 5
 - Missing-index suggestions are merged to prevent bloat; parameter-sniffing test scripts (`OPTION (RECOMPILE)`, `OPTIMIZE FOR`) are generated automatically.
 - **CE severity scoring** is runtime-evidence-only (revised per feedback from Joe Chang): severity is a function of the CE mismatch ratio, CPU-volume weight (`RowsRead`) and a waste multiplier penalising operators that scan many rows but pass few — the optimizer's page-weighted cost estimate is deliberately *not* used.
 
-<!-- SCREENSHOT: console output of Get-SqlPlanInsights showing the findings sections -->
-![Get-SqlPlanInsights console output](screenshots/execution-plan-report.png)
-
 ---
 
 ## Move Database Objects (`shrinkDbObjects.ps1`)
@@ -145,8 +132,6 @@ For each object it generates the correct DDL:
 
 Columnstore indexes are relocated only with `-IncludeColumnstore`. Partitioned, XML / spatial / full-text / in-memory / FILESTREAM structures are skipped with a warning by design — they need bespoke handling. Prefers **dbatools**, falls back to the **SqlServer** module, then raw `SqlClient`.
 
-<!-- SCREENSHOT: the -ReportOnly object classification output, or a snippet of the generated .sql -->
-![Move objects report / generated DDL](screenshots/move-objects-report.png)
 
 ---
 
@@ -169,8 +154,6 @@ The workbook is auto-width with filters on every column, then zipped (the unzipp
 
 Noise-reduction switches let you include/exclude policy logins, blank logins and `NT*` service principals. Requires **dbatools** and **ImportExcel**, plus sysadmin on each instance. (The permission-enumeration T-SQL is adapted from a well-known [DBA StackExchange answer](https://dba.stackexchange.com/questions/36618/list-all-permissions-for-a-given-role).)
 
-<!-- SCREENSHOT: the resulting Excel workbook with the two worksheets and filters -->
-![Permissions workbook](screenshots/permissions-spreadsheet.png)
 
 ---
 
