@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Runs daily health, configuration and security checks across one or more SQL Server instances.
+    WIP -Runs daily health, configuration and security checks across one or more SQL Server instances.
 
 .DESCRIPTION
     A generic, JSON-emitting estate monitoring script. Instances are supplied as a
