@@ -5,7 +5,7 @@ A small toolbox of production-minded SQL Server utilities I've built and used as
 Two principles run through all of it:
 
 - **Nothing leaves your machine.** The visualiser is a single HTML file with no network calls — your execution plans (which can leak schema, object names and literal parameter values) are never uploaded anywhere. The PowerShell tools only ever talk to the instances you point them at.
-- **Read before you run.** The scripts that change things default to *script-only / dry-run*. You get reviewable T-SQL out; nothing touches the database until you explicitly ask it to.
+- **Read before you run.** The scripts that change things default to *script-only / dry-run*. You get reviewable T-SQL out; nothing touches the database until you explicitly ask it to. The diagnostic tools (estate checker, plan analyzer) are read-only and never change anything at all.
 
 > **Licence:** MIT — see [`LICENSE`](LICENSE).
 
@@ -17,8 +17,10 @@ Two principles run through all of it:
 | --- | --- | --- |
 | [`Plan Visualizer`](Plan%20Visualizer) | `plan_visualizer_V3.html` | Single-file, offline execution-plan viewer. Drag in a `.sqlplan` or a JSON bundle from the analyzer and get an interactive diagram, cost/cardinality grid, and a tuning-insights panel. |
 | [`execution-plans`](execution-plans) | `executionPlanReport_v7.ps1` (`Get-SqlPlanInsights`) | Parses ShowPlan XML like an automated tuning consultant — CE mismatches, TempDB spills, SARGability violations, implicit conversions, parameter-sniffing risk — and can augment it with live Query Store / index telemetry. |
+| [`checker`](checker) | `Invoke-SqlEstateChecks_v2.ps1` | **(WIP)** Read-only estate-wide health check across a list of instances — configuration drift, backup/integrity currency, capacity risks — rolled up into a single self-contained HTML report. |
 | [`move-database-objects`](move-database-objects) | `shrinkDbObjects.ps1` | Relocates tables, heaps and indexes (including LOB data) onto a target filegroup, preserving constraints. Used to reclaim space after a shrink, or to move objects between filegroups safely. |
 | [`permissions`](permissions) | `sqlPermissions.ps1` | Exports instance-level role memberships and database-level permissions across a list of instances to a filtered, auto-width Excel workbook, then zips it. |
+| [`troubleshooting`](troubleshooting) | `Troubleshooting_Guide.html` | Offline HTML incident runbook for triaging SQL Server under pressure — blocking, deadlocks, tempdb, high CPU, plan regressions, log growth, AG health. |
 
 ---
 
@@ -101,6 +103,35 @@ Get-SqlPlanInsights -Path ".\Execution plan.xml" -CEMismatchRatio 5 -CEMinRows 5
 
 ---
 
+## SQL Estate Health Check — `Invoke-SqlEstateChecks_v2.ps1`  *(work in progress)*
+
+A **read-only** health check that sweeps an entire estate in one pass. Point it at a list of instances and it inspects each one for the configuration drift, capacity risks and best-practice violations that tend to surface at the worst possible moment — then rolls the findings up into a single self-contained HTML report you can hand to a colleague, attach to a change review, or keep as a point-in-time baseline.
+
+It only ever *reads*. There is no `-Execute` switch and nothing to undo — the script makes no changes to any instance or database.
+
+**Typical checks** *(evolving — see the script for the current set)*
+
+- **Instance configuration** — max server memory, MAXDOP, cost threshold for parallelism, optimise-for-ad-hoc and other server settings that drift away from sensible defaults.
+- **Database settings** — recovery model vs. backup reality, page verify (`CHECKSUM`), auto-shrink, auto-close, compatibility level and owner.
+- **Backup currency** — last full / differential / log backup per database, flagging anything outside policy.
+- **Integrity** — most recent successful `DBCC CHECKDB`, flagging databases overdue for a consistency check.
+- **Capacity** — data/log file free space and growth settings, drive headroom.
+- **Agent & jobs** — recently failed jobs and jobs with no failure notification.
+
+Findings are graded so the report leads with what actually needs attention rather than a flat wall of green ticks.
+
+```powershell
+# From an instances.txt file (one instance per line; # comments allowed)
+.\Invoke-SqlEstateChecks_v2.ps1 -InstancesFile .\instances.txt -OutputDir .\out
+
+# Or pass instances inline
+.\Invoke-SqlEstateChecks_v2.ps1 -Instances "SQL01","SQL02\PROD" -OutputDir .\out
+```
+
+Requires **dbatools**, and read access (typically `VIEW SERVER STATE` plus database-level read) on each instance. The file `Invoke-SqlEstateChecks.ps1--SUPERSEDED-BY-V2` is the previous version, kept for reference only — run **v2**.
+
+---
+
 ## Move Database Objects (`shrinkDbObjects.ps1`)
 
 Shrinks rowstore tables, heaps and indexes in a single database by relocating them onto a target filegroup — **including LOB / BLOB (`TEXTIMAGE` / `LOB_DATA`) data** — while preserving PK / UNIQUE / FK / CHECK / DEFAULT constraints. The classic use case is reclaiming space after the file-level fragmentation a `DBCC SHRINKFILE` leaves behind, by genuinely rewriting allocation units onto a clean filegroup.
@@ -157,12 +188,30 @@ Noise-reduction switches let you include/exclude policy logins, blank logins and
 
 ---
 
+## Troubleshooting Guide (`Troubleshooting_Guide.html`)
+
+A single, offline HTML runbook for triaging a SQL Server incident while it's happening — the structured first-response reference you'd want open during a major incident, rather than half-remembering which DMV to hit at 2 a.m. Open it in any browser: no install, no build step, no network calls.
+
+**Covers** *(see the guide for the current set)*
+
+- **Blocking & lock waits** — finding the head blocker, walking the blocking chain, and seeing what's holding what.
+- **Deadlocks** — pulling and reading the deadlock graph, and the usual resolution paths.
+- **tempdb contention** — allocation (PFS / GAM / SGAM) and metadata contention, spills, version-store growth.
+- **High CPU** — separating a plan problem from a workload problem, and the queries to confirm which.
+- **Plan regressions** — spotting a regressed plan and the Query Store route to forcing a known-good one.
+- **Runaway log growth** — what's holding `log_reuse_wait_desc`, and how to recover headroom safely.
+- **Availability Groups** — synchronisation state, redo queue and failover health.
+
+Each section pairs a short "what you're looking at" with the diagnostic queries to run and a decision path through the fix.
+
+---
+
 ## Requirements
 
 - **PowerShell** 5.1+ (the scripts are Windows PowerShell / PowerShell 7 compatible).
-- **[dbatools](https://dbatools.io/)** — used by the analyzer (when connecting), the move-objects script and the permissions export.
+- **[dbatools](https://dbatools.io/)** — used by the analyzer (when connecting), the estate checker, the move-objects script and the permissions export.
 - **[ImportExcel](https://github.com/dfinke/ImportExcel)** — used by the permissions export.
-- A modern browser for the Plan Visualizer. No other dependencies — it's one self-contained HTML file.
+- A modern browser for the Plan Visualizer and the Troubleshooting Guide. No other dependencies — each is one self-contained HTML file.
 
 ```powershell
 Install-Module dbatools, ImportExcel -Scope CurrentUser
