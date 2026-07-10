@@ -50,6 +50,7 @@
     Philosophy: read-only, dependency-free, self-contained output, defensive
                 per-check error handling - a single check failing logs a
                 collection issue rather than ending the run.
+    License   : MIT
 
 .PARAMETER SqlInstance
     One or more SQL Server instances to audit, supplied directly.
