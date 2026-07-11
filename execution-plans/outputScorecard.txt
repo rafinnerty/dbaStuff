@@ -1,0 +1,422 @@
+PS C:\SQL STUFF> C:\SQL STUFF\executionPlanReport_v9.ps1
+
+PS C:\SQL STUFF> Get-SqlPlanInsights -Path .\z6.sqlplan -ServerInstance . -Database "StackOverflow2013" -InspectDatabase -OutFile ".\plan.json"
+v9
+
+=== SQL Plan Insights ===
+File: C:\SQL STUFF\z6.sqlplan
+Statement chosen: Id=2
+StatementText: SELECT TOP (5000)
+        u.DisplayName,
+        u.Reputation * 1.1  AS AdjustedRep,     -- SIN 1: int * numeric -> expression CONVERT_IMPLICIT in Compute Scalar
+        p.Title,
+        p.Score,
+        p.CreationD...
+
+Query Store Telemetry (Recent Context):
+ - QueryHash : 0x48E20A24FAE0BBA1 | PlanHash : 0x08B3F11B56D8313D
+ - Executions: 2
+ - Avg CPU   : 30,659.03 ms
+ - Avg Time  : 35,000.12 ms (Max: 69,902.88 ms)
+ - Avg Reads : 5,447,811 pages
+ - Plan Regression Check: No cheaper historical plans found (current plan is optimal or the only plan).
+
+[-OutFile] Writing sqlplan-insights bundle -> C:\SQL STUFF\plan.json
+[-OutFile] Wrote 134,400 bytes -> C:\SQL STUFF\plan.json
+
+Significant Cardinality Estimate Mismatches Detected:
+
+NodeId PhysicalOp            EstRows ActRows Ratio      Object                                                                                                              
+------ ----------            ------- ------- -----      ------                                                                                                              
+    14 Clustered Index Seek 0.350847  393815 1122469.34 [StackOverflow2013].[dbo].[Posts] ([PK_Posts_Id])                                                                   
+     9 Index Seek            2.13754  469766 219769.45  [StackOverflow2013].[dbo].[Users] ([IX_Users_Reputation])                                                           
+    11 Clustered Index Seek 0.467829   36132 77233.35   [StackOverflow2013].[dbo].[Users] ([PK_Users_Id])                                                                   
+     8 Nested Loops                1   36132 36132.00   (via: [StackOverflow2013].[dbo].[Users] ([IX_Users_Reputation]) | [StackOverflow2013].[dbo].[Users] ([PK_Users_Id]))
+     6 Sort                        1   31451 31451.00                                                                                                                       
+     5 Nested Loops          132.617 1477819 11143.51   (via: [StackOverflow2013].[dbo].[Users] ([IX_Users_Reputation]) | [StackOverflow2013].[dbo].[Users] ([PK_Users_Id]))
+    12 Index Seek            132.617 1477819 11143.51   [StackOverflow2013].[dbo].[Posts] ([IX_Posts_OwnerUserId])                                                          
+     3 Nested Loops          46.5282  393815 8464.01    (via: [StackOverflow2013].[dbo].[Users] ([IX_Users_Reputation]) | [StackOverflow2013].[dbo].[Users] ([PK_Users_Id]))
+
+
+
+Query Wait Statistics (Actual Plan Only):
+
+WaitType                       WaitTimeMs WaitCount AvgWaitMs
+--------                       ---------- --------- ---------
+MEMORY_ALLOCATION_EXT               24410   2805078     0.009
+PAGEIOLATCH_SH                       9010     42881      0.21
+SOS_SCHEDULER_YIELD                    66     11314     0.006
+MEMORY_ALLOCATION_EXT                   6      4948     0.001
+RESERVED_MEMORY_ALLOCATION_EXT          1       112     0.009
+
+
+
+DOP: planned=1 observed=1 (parallelism=n/a maxRuntime=1)
+Memory grant KB: Requested=1024.00 Granted=1024.00 Used=n/a MaxUsed=896.00 WaitMS=0.00 FeedbackAdjusted=No: Accurate Grant
+
+Memory grant analysis: WastePct=12.50% UnderPct=0.00%
+Spill markers in XML: SpillLevel, SortSpillDetails, Spilled, SpillToTempDb
+
+Top operators by EstimatedTotalSubtreeCost:
+
+NodeId PhysicalOp                        LogicalOp            EstCost SelfCost EstRows ActOut  ActWork RatioOut   RatioWork 
+------ ----------                        ---------            ------- -------- ------- ------  ------- --------   --------- 
+    16 Index Scan                        Index Scan           37.36   37.36    8042000 1       1       0.00       0.00      
+    15 Index Scan                        Index Scan           37.36   37.36    276     155     155     0.56       0.56      
+    14 Clustered Index Seek (Key Lookup) Clustered Index Seek 0.43    0.43     0       393815  393815  1122469.34 1122469.34
+    12 Index Seek                        Index Seek           0.00    0.00     133     1477819 1477819 11143.51   11143.51  
+    11 Clustered Index Seek (Key Lookup) Clustered Index Seek 0.01    0.01     0       36132   36132   77233.35   77233.35  
+     9 Index Seek                        Index Seek           0.00    0.00     2       469766  469766  219769.45  219769.45 
+     8   >> NESTED LOOPS <<              Inner Join           0.01    0.00     1       36132   36132   36132.00   36132.00  
+     7     -> Compute Scalar             Compute Scalar       0.01    0.00     1                                            
+     6       >> SORT <<                  Sort                 0.02    0.01     1       31451   31451   31451.00   31451.00  
+     5         >> NESTED LOOPS <<        Inner Join           0.02    0.00     133     1477819 1477819 11143.51   11143.51  
+     3           >> NESTED LOOPS <<      Inner Join           0.46    0.02     47      393815  393815  8464.01    8464.01   
+     2             >> MERGE JOIN <<      Inner Join           41.70   4.34     47                                           
+     1               >> MERGE JOIN <<    Inner Join           96.37   54.68    284                                          
+     0                 >> SORT <<        TopN Sort            96.39   0.01     284                                          
+
+
+  Note: Operators highlighted with >> << (e.g., >> SORT <<, >> HASH MATCH <<) are heavy execution nodes
+  that frequently cause TempDB spills, CPU spikes, or memory grant issues. 
+  This grid is filtered to the most expensive operators, excluding trivial/zero-cost nodes (like Compute Scalars) 
+  and nodes that fall below the Top N cost threshold, focusing your attention on the true bottlenecks.
+
+
+Top operators by EstimatedSelfCost (delta):
+ - (same operators as subtree-cost list; omitted)
+
+Top operators by True CPU Volume (Actual Rows Read):
+
+NodeId PhysicalOp                        LogicalOp            RowsRead ActOut  WasteRatio EstCost Access     Object                                                    
+------ ----------                        ---------            -------- ------  ---------- ------- ------     ------                                                    
+    15 Index Scan                        Index Scan           8042005  155     51883.90   37.36   Index Scan [StackOverflow2013].[dbo].[Badges] ([IX_Badges_UserId])   
+    12 Index Seek                        Index Seek           1477819  1477819 1.00       0.00    Index Scan [StackOverflow2013].[dbo].[Posts] ([IX_Posts_OwnerUserId])
+    14 Clustered Index Seek (Key Lookup) Clustered Index Seek 1477819  393815  3.75       0.43    Index Scan [StackOverflow2013].[dbo].[Posts] ([PK_Posts_Id])         
+     9 Index Seek                        Index Seek           469766   469766  1.00       0.00    Index Scan [StackOverflow2013].[dbo].[Users] ([IX_Users_Reputation]) 
+    11 Clustered Index Seek (Key Lookup) Clustered Index Seek 469766   36132   13.00      0.01    Index Scan [StackOverflow2013].[dbo].[Users] ([PK_Users_Id])         
+    16 Index Scan                        Index Scan           1        1       1.00       37.36   Index Scan [StackOverflow2013].[dbo].[Badges] ([IX_Badges_UserId])   
+
+
+  Note: High RowsRead combined with low ActOut indicates severe residual predicate CPU burn.
+
+Key/RID lookups (call volume):
+
+NodeId PhysicalOp           LookupCalls ActRows  EstRows Object                                           
+------ ----------           ----------- -------  ------- ------                                           
+    14 Clustered Index Seek     1477819  393815 0.350847 [StackOverflow2013].[dbo].[Posts] ([PK_Posts_Id])
+    11 Clustered Index Seek      469766   36132 0.467829 [StackOverflow2013].[dbo].[Users] ([PK_Users_Id])
+
+
+  >> 2 lookup operator(s) at or above the 10,000-call threshold. Each call is a random clustered-index probe;
+  >> consider a covering index (INCLUDE the looked-up columns) or trimming the SELECT list.
+  Note: LookupCalls = executions driven by the outer join input, the true volume metric for a lookup.
+
+Join strategy sanity checks (heuristic):
+ - 4 matching operators grouped into 2 finding(s). Use -ShowAllHeuristicMatches to list each operator.
+
+Count NodeIds Join         Signal               RowsMin RowsMax ExecMax EstCostMax WorstNode LogicalOps Objects                                                                                                             
+----- ------- ----         ------               ------- ------- ------- ---------- --------- ---------- -------                                                                                                             
+    2 1, 2    Merge Join   merge join + sort(s) 0       0       1       96.37              1 Inner Join (via: [StackOverflow2013].[dbo].[Users] ([IX_Users_Reputation]) | [StackOverflow2013].[dbo].[Users] ([PK_Users_Id]))
+    2 3, 5    Nested Loops large join output    393815  1477819 1       0.46               3 Inner Join (via: [StackOverflow2013].[dbo].[Users] ([IX_Users_Reputation]) | [StackOverflow2013].[dbo].[Users] ([PK_Users_Id]))
+
+
+
+Operator red flags (heuristic):
+ - (none detected)
+
+Spill signals (from plan XML):
+
+NodeId Operator Signal          Detail                                   
+------ -------- ------          ------                                   
+     0 Sort     spill to tempdb Warnings: SortSpillDetails, SpillToTempDb
+     6 Sort     spill to tempdb Warnings: SortSpillDetails, SpillToTempDb
+
+
+
+Parallelism skew signals (heuristic):
+ - (none detected)
+
+Many-to-many merge join signals:
+
+NodeId Join       Signal                  Detail                                                                                                                                            
+------ ----       ------                  ------                                                                                                                                            
+     1 Merge Join many-to-many merge join Many-to-many Merge Join detected. This can build worktables and amplify rows/memory. Consider join keys/order, indexes, and predicate selectivity.
+     2 Merge Join many-to-many merge join Many-to-many Merge Join detected. This can build worktables and amplify rows/memory. Consider join keys/order, indexes, and predicate selectivity.
+
+
+
+Implicit conversion signals (PlanAffectingConvert):
+ - (none detected) Note: SQL Server only creates PlanAffectingConvert elements when implicit conversions significantly affect plan choice.
+
+Predicate CONVERT_IMPLICIT signals (heuristic):
+
+NodeId PhysicalOp           Object                                           
+------ ----------           ------                                           
+    14 Clustered Index Seek [StackOverflow2013].[dbo].[Posts] ([PK_Posts_Id])
+
+
+Tip: confirm the conversion is happening on the column side of a predicate/seek; if so, align parameter/column datatypes to restore seeks.
+
+Expression CONVERT_IMPLICIT in Compute Scalar:
+
+NodeId Operator       Expression                                                                                                
+------ --------       ----------                                                                                                
+     7 Compute Scalar CONVERT_IMPLICIT(numeric(10,0),[StackOverflow2013].[dbo].[Users].[Reputation] as [u].[Reputation],0)*(1.1)
+
+
+Note: compute-scalar conversions are often harmless for seekability, but can add CPU or hint at datatype mismatches upstream.
+
+Predicate SARGability signals (heuristic):
+
+NodeIds                    Issues                Expression                                                                                                
+-------                    ------                ----------                                                                                                
+0, 1, 2, 3, 5, 6, 7, 8, 11 UPPER/LOWER on column upper([StackOverflow2013].[dbo].[Users].[Location] as [u].[Location]) like [@Loc]                         
+14                         implicit conversion   [StackOverflow2013].[dbo].[Posts].[ViewCount] as [p].[ViewCount]>=CONVERT_IMPLICIT(int,[@ViewCountText],0)
+
+
+
+Parameter sensitivity signals:
+
+Name   DataType CompiledValue RuntimeValue ValueRatio
+----   -------- ------------- ------------ ----------
+@RepHi int      (1000001)     (50000)      20.00     
+@RepLo int      (1000000)     (100)        10000.00  
+
+
+
+Index intersection signals (heuristic):
+ - (none detected) Note: No bitmap operators or PROBE()/Opt_Bitmap patterns detected in plan.
+
+Rewrite / design hints (heuristic):
+ - Non-SARGable predicate signals found. Fix datatype mismatches, avoid functions on filtered columns, and avoid leading-wildcard LIKE when possible.
+ - Parameter sensitivity signals found. Consider (RECOMPILE), OPTIMIZE FOR, or alternative query shapes to reduce plan variance.
+
+Cardinality estimator model (per statement):
+
+StatementId CEVersion CompatLevel Signal        
+----------- --------- ----------- ------        
+1                 160         160 modern CE     
+1                 160         160 modern CE     
+1                  70         160 LEGACY CE (70)
+2                  70         160 LEGACY CE (70)
+
+
+  Note (Stmt 1): Compiled under the pre-2014 estimator, but live compat level is 160 (> 110) - so the source is LEGACY_CARDINALITY_ESTIMATION db-scoped config, a USE HINT in the query, or trace flag 9481, NOT the compat leve
+l. CE feedback and most IQP features do not apply.
+  Note (Stmt 2): Compiled under the pre-2014 estimator, but live compat level is 160 (> 110) - so the source is LEGACY_CARDINALITY_ESTIMATION db-scoped config, a USE HINT in the query, or trace flag 9481, NOT the compat leve
+l. CE feedback and most IQP features do not apply.
+
+Query/table hint signals (heuristic):
+
+StatementId Source           Hint             Detail                                         
+----------- ------           ----             ------                                         
+1           OPTION clause    MAXDOP           MAXDOP 8                                       
+1           OPTION clause    USE HINT         USE HINT('FORCE_LEGACY_CARDINALITY_ESTIMATION')
+1           OPTION clause    GRANT PERCENT    MAX_GRANT_PERCENT = 0.1                        
+1           Inline join hint INNER MERGE JOIN INNER MERGE JOIN                               
+1           Inline join hint INNER MERGE JOIN INNER MERGE JOIN                               
+2           OPTION clause    MAXDOP           MAXDOP 8                                       
+2           OPTION clause    USE HINT         USE HINT('FORCE_LEGACY_CARDINALITY_ESTIMATION')
+2           OPTION clause    GRANT PERCENT    MAX_GRANT_PERCENT = 0.1                        
+2           Inline join hint INNER MERGE JOIN INNER MERGE JOIN                               
+2           Inline join hint INNER MERGE JOIN INNER MERGE JOIN                               
+
+
+ - MAXDOP: Parallelism pinned to DOP 8 - instance/db MAXDOP and cost threshold are being overridden.
+ - USE HINT: Hint 'FORCE_LEGACY_CARDINALITY_ESTIMATION' active - check its specific effect (CE version, optimizer behaviour) before tuning.
+ - GRANT PERCENT: Optimizer behaviour constrained by explicit hint.
+ - INNER MERGE JOIN: Forces the join algorithm AND the join order for the whole statement (inline join hints imply FORCE ORDER).
+ - INNER MERGE JOIN: Forces the join algorithm AND the join order for the whole statement (inline join hints imply FORCE ORDER).
+ - MAXDOP: Parallelism pinned to DOP 8 - instance/db MAXDOP and cost threshold are being overridden.
+ - USE HINT: Hint 'FORCE_LEGACY_CARDINALITY_ESTIMATION' active - check its specific effect (CE version, optimizer behaviour) before tuning.
+ - GRANT PERCENT: Optimizer behaviour constrained by explicit hint.
+ - INNER MERGE JOIN: Forces the join algorithm AND the join order for the whole statement (inline join hints imply FORCE ORDER).
+ - INNER MERGE JOIN: Forces the join algorithm AND the join order for the whole statement (inline join hints imply FORCE ORDER).
+
+  >> Plan shape was mandated by hints, not chosen by the optimizer.
+  >> Treat tuning conclusions accordingly: fix the underlying reason the
+  >> hint was added before trusting what this plan appears to 'prefer'.
+
+Order / sort support opportunities (heuristic):
+
+FullTable                         SortColumns CoveredByExistingIndex CoveringIndexName
+---------                         ----------- ---------------------- -----------------
+[StackOverflow2013].[dbo].[Users] Id                            True PK_Users_Id      
+
+
+Note: CoveredByExistingIndex means an existing index has a key prefix matching the sort columns (in order). The optimizer may still choose a different access path.
+Note: Even when order is covered, missing INCLUDE columns can still force lookups.
+ - Order is covered, but INCLUDE differs; may still see lookups for: DisplayName, Location, Reputation (e.g., on PK_Users_Id).
+
+Missing index recommendations (from plan XML):
+
+Impact FullTable                          Equality Inequality Include 
+------ ---------                          -------- ---------- ------- 
+42.69  [StackOverflow2013].[dbo].[Badges] [Name]              [UserId]
+
+
+
+Example CREATE INDEX statements (validate first):
+ - CREATE INDEX [IX_Tune_Badges_6e3206b7] ON [StackOverflow2013].[dbo].[Badges] ([Name]) INCLUDE ([UserId]);
+
+Automated Mitigation Testing Scripts (Parameter Sniffing):
+Append one of these hints to the end of your query to test a fix:
+
+-- Test 1: Generate a fresh plan for the specific runtime values (High CPU penalty if executed frequently)
+OPTION (RECOMPILE);
+
+-- Test 2: Generate an 'average' plan using density vectors (Protects against edge cases, but ignores the histogram)
+OPTION (OPTIMIZE FOR UNKNOWN);
+
+-- Test 3: Force the optimizer to use the original Compiled Values (Reproduces the original compiled plan behavior)
+OPTION (OPTIMIZE FOR (@RepHi = 1000001, @RepLo = 1000000));
+
+-- Test 4: Force the optimizer to use the current Runtime Values (To see if the new plan is definitively better)
+OPTION (OPTIMIZE FOR (@RepHi = 50000, @RepLo = 100));
+
+Inaccurate cardinality estimation (SSMS-style):
+ - (all CE-mismatch nodes are already listed above in Top operators; omitted)
+
+CE hot spots (grouped by statement):
+
+StatementId WorstNode WorstRatio WorstSeverity NodesFlagged StatementText                                                                                                                                                      
+----------- --------- ---------- ------------- ------------ -------------                                                                                                                                                      
+2                  14 1122469.34 450.40                   9 SELECT TOP (5000)...                                                                                                                                               
+
+
+
+CE details (top 5 statements, top 3 nodes each):
+  (ActRowsOut = trusted output rows where meaningful; ActRowsWork = summed worker rows)
+StatementId 2
+
+NodeId             : 14
+PhysicalOp         : Clustered Index Seek
+EstRows            : 0
+ActRowsOut         : 393815
+ActRowsWork        : 393815
+RatioOut           : 1122469.34
+RatioWork          : 1122469.34
+LikelyContributors : implicit conversion (CONVERT_IMPLICIT); non-sargable (convert_implicit); scan (predicate may not be seekable)
+SeekPredicate     : [StackOverflow2013].[dbo].[Posts].[Id] as [p].[Id]
+Residual          : [StackOverflow2013].[dbo].[Posts].[ViewCount] as [p].[ViewCount]>=CONVERT_IMPLICIT(int,[@ViewCountText],0)
+
+NodeId             : 11
+PhysicalOp         : Clustered Index Seek
+EstRows            : 0
+ActRowsOut         : 36132
+ActRowsWork        : 36132
+RatioOut           : 77233.35
+RatioWork          : 77233.35
+LikelyContributors : UPPER/LOWER on column; scan (predicate may not be seekable); high read-to-return ratio
+SeekPredicate     : [StackOverflow2013].[dbo].[Users].[Id] as [u].[Id]
+Residual          : upper([StackOverflow2013].[dbo].[Users].[Location] as [u].[Location]) like [@Loc]
+
+NodeId             : 9
+PhysicalOp         : Index Seek
+EstRows            : 2
+ActRowsOut         : 469766
+ActRowsWork        : 469766
+RatioOut           : 219769.45
+RatioWork          : 219769.45
+LikelyContributors : scan (predicate may not be seekable)
+SeekPredicate     : [[StackOverflow2013]].[[dbo]].[[Users]].[Reputation] BETWEEN [@RepLo] AND [@RepHi]
+
+
+Suggestions:
+ - Missing index suggestion found in plan XML. Validate against workload + existing indexes (SSMS can hide/show inconsistently).
+ - Cardinality mismatches found. Focus on highest Severity first; check stats, datatypes, predicates, and parameter sniffing patterns.
+ - High-volume lookups detected (calls above threshold). Consider covering indexes or reducing selected columns.
+ - Sort operators present. Review SortKeys and ORDER BY; consider indexes/persisted computed columns, and memory grant/spills.
+ - Memory grant info present. Compare Granted vs Used/MaxUsed to spot spills or wasted grants.
+ - Spills detected in plan warnings. Investigate Sort/Hash spills, memory grants, and tempdb pressure.
+ - Many-to-many Merge Join detected. Check join predicates and indexing; this can amplify work via worktables and large memory use.
+ - Spill markers detected in plan XML. Investigate memory grants, hash/sort inputs, and tempdb.
+ - Parameter sensitivity signals found (compiled vs runtime values differ). Consider parameter sniffing mitigations (OPTION(RECOMPILE), OPTIMIZE FOR, plan guides, or rewriting).
+ - Join strategy checks flagged potential issues. Review join types, input sizes, and supporting indexes.
+ - Non-SARGable predicate signals detected. Review implicit conversions, functions on columns, and leading-wildcard LIKE patterns.
+ - Plan compiled under legacy CE (model 70). CE feedback and most IQP features do not apply; identify the source (db-scoped config, USE HINT, TF 9481, or compat level) before chasing estimate quality.
+ - Query/table hints detected. Plan shape was mandated, not chosen by the optimizer - fix the underlying reason the hint was added before trusting what this plan appears to 'prefer'.
+ - Note: join algorithm/order is hint-forced, so any 'review join types' findings above reflect the mandated shape, not an optimizer choice.
+ - Predicate implicit conversion(s) detected (CONVERT_IMPLICIT). These can prevent seeks and skew cardinality; align datatypes (parameters/columns) where possible.
+ - Expression implicit conversions detected in Compute Scalar. Usually not a seek blocker, but can add CPU or indicate upstream datatype mismatches.
+
+Database inspection: .\StackOverflow2013
+Target tables:
+ - [StackOverflow2013].[dbo].[Badges]
+ - [StackOverflow2013].[dbo].[Users]
+ - [StackOverflow2013].[dbo].[Posts]
+
+Indexes (per target table):
+
+FullTable                          IndexId IndexName            TypeDesc     IsUnique IsPrimaryKey HasFilter KeyCols           IncludeCols UserSeeks
+---------                          ------- ---------            --------     -------- ------------ --------- -------           ----------- ---------
+[StackOverflow2013].[dbo].[Badges]       1 PK_Badges_Id         CLUSTERED        True         True     False [Id] ASC                              0
+[StackOverflow2013].[dbo].[Badges]       2 IX_Badges_UserId     NONCLUSTERED    False        False     False [UserId] ASC      [Name]              0
+[StackOverflow2013].[dbo].[Posts]        1 PK_Posts_Id          CLUSTERED        True         True     False [Id] ASC                              0
+[StackOverflow2013].[dbo].[Posts]        3 IX_Posts_OwnerUserId NONCLUSTERED    False        False     False [OwnerUserId] ASC                     6
+[StackOverflow2013].[dbo].[Users]        1 PK_Users_Id          CLUSTERED        True         True     False [Id] ASC                              1
+[StackOverflow2013].[dbo].[Users]        3 IX_Users_Reputation  NONCLUSTERED    False        False     False [Reputation] ASC                      6
+
+
+
+Statistics (per target table):
+
+FullTable                          StatsName                 LastUpdated     Rows Mods ModRatio StatsCols     AutoCreated UserCreated NoRecompute
+---------                          ---------                 -----------     ---- ---- -------- ---------     ----------- ----------- -----------
+[StackOverflow2013].[dbo].[Badges] _WA_Sys_00000002_7D78A4E7 2026-07-11   8042005    0 0.00     [Name]               True       False       False
+[StackOverflow2013].[dbo].[Badges] IX_Badges_UserId          2026-07-11   8042005    0 0.00     [UserId]            False       False       False
+[StackOverflow2013].[dbo].[Badges] PK_Badges_Id              2018-09-10   8042005    0 0.00     [Id]                False       False       False
+[StackOverflow2013].[dbo].[Posts]  _WA_Sys_0000000E_0519C6AF 2026-06-14  17142169    0 0.00     [OwnerUserId]        True       False       False
+[StackOverflow2013].[dbo].[Posts]  _WA_Sys_00000014_0519C6AF 2026-07-11  17142169    0 0.00     [ViewCount]          True       False       False
+[StackOverflow2013].[dbo].[Posts]  IX_Posts_OwnerUserId      2026-07-11  17142169    0 0.00     [OwnerUserId]       False       False       False
+[StackOverflow2013].[dbo].[Posts]  PK_Posts_Id               2018-09-10  17142169    0 0.00     [Id]                False       False       False
+[StackOverflow2013].[dbo].[Users]  _WA_Sys_00000005_08EA5793 2026-06-14   2465713    0 0.00     [DisplayName]        True       False       False
+[StackOverflow2013].[dbo].[Users]  _WA_Sys_00000009_08EA5793 2026-07-11   2465713    0 0.00     [Location]           True       False       False
+[StackOverflow2013].[dbo].[Users]  IX_Users_Reputation       2026-07-11   2465713    0 0.00     [Reputation]        False       False       False
+[StackOverflow2013].[dbo].[Users]  PK_Users_Id               2018-09-10   2465713    0 0.00     [Id]                False       False       False
+
+
+
+Missing-index coverage check (heuristic: does an existing index already cover it?):
+
+FullTable                          Impact Occurrences Duplicate SuggestedKeys SuggestedIncludes CoveredByExistingIndex
+---------                          ------ ----------- --------- ------------- ----------------- ----------------------
+[StackOverflow2013].[dbo].[Badges] 42.69            1           [Name]        [UserId]                                
+
+
+
+Useful links:
+ - Cardinality estimation (Microsoft): https://learn.microsoft.com/en-us/sql/relational-databases/performance/cardinality-estimation-sql-server?view=sql-server-ver17
+ - CE Feedback (Microsoft IQP): https://learn.microsoft.com/en-us/sql/relational-databases/performance/intelligent-query-processing-cardinality-estimation-feedback?view=sql-server-ver17
+ - Implicit conversion is a SARGability problem (Erik Darling): https://erikdarling.com/implicit-conversion-is-a-sargability-problem/
+ - Why implicit conversions aren't SARGable (Erik Darling): https://erikdarling.com/sargability-week-why-implicit-conversions-arent-sargable/
+ - Bad guesses -> bad choices (Erik Darling): https://erikdarling.com/bad-guesses-and-bad-choices-better-living-through-indexes/
+ - SSMS hides missing indexes (Brent Ozar): https://www.brentozar.com/archive/2018/07/management-studio-hides-missing-indexes-from-you/
+ - Missing index recs aren't perfect (Brent Ozar): https://www.brentozar.com/archive/2017/08/missing-index-recommendations-arent-perfect/
+ - Expensive key lookups (Brent Ozar): https://www.brentozar.com/blitzcache/expensive-key-lookups/
+ - Expensive sorts (Brent Ozar): https://www.brentozar.com/blitzcache/expensive-sorts/
+
+
+File                 : C:\SQL STUFF\z6.sqlplan
+DegreeOfParallelism  : 1
+TopOperatorsCount    : 14
+CEIssuesCount        : 9
+MissingIndexesCount  : 1
+KeyLookupsCount      : 2
+SortOpsCount         : 2
+ParallelismOpsCount  : 0
+JoinChecksCount      : 4
+SpillOpsCount        : 2
+ParallelSkewCount    : 0
+ManyToManyMergeCount : 2
+PlanConvertCount     : 0
+CEModelVersion       : 70
+HintSignalsCount     : 10
+SuggestionsCount     : 16
+InspectedDatabase    : True
+
+
+
+
+PS C:\SQL STUFF> 
