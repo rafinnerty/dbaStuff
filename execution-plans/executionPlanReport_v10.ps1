@@ -1,12 +1,51 @@
-﻿<#
+<#
 .SYNOPSIS
   Parse SQL Server ShowPlan XML (.sqlplan / .xml) and output advanced performance insights.
 
 .DESCRIPTION
   Get-SqlPlanInsights acts as an automated query tuning consultant. It parses execution
   plans to identify Cardinality Estimation (CE) mismatches, TempDB spills, SARGability
-  violations, implicit conversions, and parameter sniffing risks.
- 
+  violations, implicit conversions, and parameter sniffing risks. v9 adds CE model
+  version reporting (legacy CE 70 detection) and query/table hint detection.
+
+  v10 is a correctness overhaul:
+  - Seek/scan/lookup access classification fixed at the root: showplan XML represents
+    all three as <IndexScan>, distinguished by <SeekPredicates> and Lookup="1"; the
+    old ./sp:IndexSeek branch could never match, so every seek reported as a scan.
+  - CE "LikelyContributors" made lookup- and rebind-aware (lookup volume = outer join
+    input, not a scan; inner-side seeks scale with executions).
+  - Seek-predicate renderer rewritten: equality keys (<Prefix ScanType="EQ">) render
+    as "column = value"; GT/GE/LT/LE ScanTypes honoured on range seeks (GE/LE pairs
+    collapse to BETWEEN, GT/LT pairs correctly refuse it); end-only ranges handled;
+    double-bracketed names fixed (Table/Schema/Database attributes arrive pre-bracketed).
+  - Clustering-key columns no longer reported as INCLUDE gaps (implicitly present in
+    every nonclustered index).
+  - Batch-qualified statement identity: StatementId restarts per <Batch>, so
+    multi-batch plans key statements as "batch.statement" (e.g. 2.1) in the CE model
+    grid, hint signals, and the chooser.
+  - Wait stats and the spill-marker scan scoped to the chosen statement (no more
+    cross-statement bleed); memory-grant suggestion gated on non-zero values.
+  - Column-side vs parameter-side CONVERT_IMPLICIT distinction throughout:
+    parameter-side conversions are converted once and don't block seeks, so they
+    report as "usually benign" instead of raising the non-SARGable alarm.
+  - New always-visible "Access predicates" section: healthy plans display their
+    rendered seek/residual predicates too (previously only visible when CE was wrong).
+  - Multi-statement chooser reworked: sniffing evidence (compiled<>runtime mismatch)
+    first, then ACTUAL elapsed time from QueryTimeStats, then estimated subtree cost;
+    the old runtime-parameter-count tiebreaker favoured auto-parameterized trivial
+    statements over expensive unparameterized ones. The report states why a statement
+    was chosen, lists the others ranked by the same keys, and a new -Statement
+    parameter overrides the selection (e.g. -Statement "2.1").
+  - Top-operators grid shows a shortened Object column ([Table] ([Index])) so the
+    object survives console-width truncation.
+  - -OutFile bundles are stamped with the run date/time (plan_yyyyMMdd_HHmmss.json);
+    wait-stats section prints an explicit empty state.
+  - Fixed the auto-generated OPTIMIZE FOR mitigation scripts producing invalid T-SQL
+    for string-typed sniffed parameters: ParameterCompiledValue/RuntimeValue for an
+    nvarchar/varchar parameter arrive pre-quoted from the plan XML (N'value'), and
+    the generator was unconditionally re-wrapping them in another N'...', producing
+    N'N'value''. Numeric parameters were unaffected (they arrive unquoted).
+
   Two primary modes of operation:
     1. Offline File Parsing   - Analyze a static .xml or .sqlplan file.
     2. Telemetry & Regression - Connect to the database to append real-time Query Store
@@ -129,7 +168,7 @@ function Get-SqlPlanInsights {
     [switch]$InspectDatabase,
     [pscredential]$SqlCredential, # <--- NEW: For SQL Authentication
 
-    # v15: analyse a specific statement instead of the auto-chosen one.
+    # v10: analyse a specific statement instead of the auto-chosen one.
     # Accepts the batch-qualified key shown in the report (e.g. "1.1"), or the
     # plain StatementId for single-batch plans.
     [string]$Statement = '',
@@ -172,7 +211,7 @@ function Get-SqlPlanInsights {
 
   $rootForSelect = $xml
 
-  # v13 fix: StatementId restarts inside every <Batch>, so a .sqlplan captured
+  # v10: StatementId restarts inside every <Batch>, so a .sqlplan captured
   # from a script with GO separators yields colliding ids — three batches all
   # reporting "StatementId 1" in the CE model grid, hint signals, and the
   # statement chooser. Key statements as "<batchOrdinal>.<StatementId>" whenever
@@ -236,7 +275,7 @@ function Get-SqlPlanInsights {
     foreach ($s in $stmtsCE) {
       $ceVersion = To-IntOrNull ($s.GetAttribute('CardinalityEstimationModelVersion'))
       if ($null -eq $ceVersion) { continue }
-      $sid = Get-StmtKey $s   # v13: batch-qualified
+      $sid = Get-StmtKey $s   # v10: batch-qualified
       $compat = $null
       # Newer schemas put DatabaseCompatLevel on the statement element; older on QueryPlan.
       if ($s.HasAttribute('DatabaseCompatLevel')) {
@@ -265,7 +304,7 @@ function Get-SqlPlanInsights {
     $out = New-Object System.Collections.Generic.List[object]
     $stmtsH = $PlanXml.SelectNodes('//sp:*[@StatementText]',$NsMgr)
     foreach ($s in $stmtsH) {
-      $sid = Get-StmtKey $s   # v13: batch-qualified
+      $sid = Get-StmtKey $s   # v10: batch-qualified
       $text = $s.GetAttribute('StatementText')
       if ([string]::IsNullOrWhiteSpace($text)) { continue }
 
@@ -334,7 +373,7 @@ function Get-SqlPlanInsights {
   }
 
   # --- statement selection (when plan contains multiple statements) ---
-  # v15: the old sort was ParamMismatchCount desc, RuntimeParamCount desc, Cost
+  # v10: the old sort was ParamMismatchCount desc, RuntimeParamCount desc, Cost
   # desc. RuntimeParamCount rewarded auto-parameterized statements — and
   # eligibility for simple parameterization correlates with being cheap and
   # single-table, so trivial statements beat expensive unparameterized ones
@@ -350,7 +389,7 @@ function Get-SqlPlanInsights {
   $stmtNodes = $xml.SelectNodes("//sp:StmtSimple",$nsm)
   if ($stmtNodes -and @($stmtNodes).Count -gt 1) {
     $stmtScores = foreach ($s in $stmtNodes) {
-      $sid = Get-StmtKey $s   # v13: batch-qualified
+      $sid = Get-StmtKey $s   # v10: batch-qualified
       $cost = To-DoubleOrNull ($s.GetAttribute("StatementSubTreeCost"))
       $qts = $s.SelectSingleNode(".//sp:QueryTimeStats",$nsm)
       $elapsedMs = if ($qts) { To-DoubleOrNull ($qts.GetAttribute("ElapsedTime")) } else { $null }
@@ -419,7 +458,7 @@ function Get-SqlPlanInsights {
   }
 
   if ($chosenStmt) {
-    $chosenStmtId = Get-StmtKey $chosenStmt   # v13: batch-qualified
+    $chosenStmtId = Get-StmtKey $chosenStmt   # v10: batch-qualified
     $chosenStmtText = $chosenStmt.GetAttribute("StatementText")
 
     # --- NEW: Extract Hashes for Query Store ---
@@ -453,6 +492,28 @@ function Get-SqlPlanInsights {
   # renaming every call site; do NOT change it to 3 decimal places without a full audit.
   function F3 ($v) { return (F2 $v) }
 
+  # v10: Object names are printed as a separate "NodeId : Object" key below each
+  # Top-operators grid rather than as a grid column - Format-Table -AutoSize sizes
+  # columns to their widest value and silently drops trailing columns (including
+  # Object) once the row is wider than the console reports, regardless of -Wrap.
+  # A plain Write-Host list has no such width ceiling.
+  function ShortObjectName ($obj) {
+    if ([string]::IsNullOrWhiteSpace($obj) -or $obj -like '(via:*') { return $null }
+    return [regex]::Replace($obj,'\[[^\]]+\]\.\[[^\]]+\]\.(\[[^\]]+\])','$1')
+  }
+  function Write-ObjectKey ($rows) {
+    $entries = @($rows) | ForEach-Object {
+      $o = ShortObjectName $_.Object
+      if ($null -ne $o) { [pscustomobject]@{ NodeId = $_.NodeId; Object = $o } }
+    }
+    if (@($entries).Count -gt 0) {
+      Write-Host "  Object key (NodeId : Object):" -ForegroundColor DarkGray
+      foreach ($e in $entries) {
+        Write-Host ("    {0,3} : {1}" -f $e.NodeId, $e.Object) -ForegroundColor DarkGray
+      }
+    }
+  }
+
 
   function Get-ScalarString ($node) {
     if (-not $node) { return $null }
@@ -481,7 +542,7 @@ function Get-SqlPlanInsights {
     $text = $stmt.GetAttribute("StatementText")
     if ($text -and $text.Length -gt 220) { $text = $text.Substring(0,220) + "..." }
     return [pscustomobject]@{
-      StatementId = Get-StmtKey $stmt   # v13: batch-qualified
+      StatementId = Get-StmtKey $stmt   # v10: batch-qualified
       StatementText = $text
     }
   }
@@ -686,7 +747,7 @@ function Get-SqlPlanInsights {
     return (-not $isParam -and -not $isInternalExpr -and $hasColRef)
   }
 
-  # v13: distinguish column-side CONVERT_IMPLICIT (wraps a column reference —
+  # v10: distinguish column-side CONVERT_IMPLICIT (wraps a column reference —
   # blocks seeks, skews CE) from parameter-side (wraps a parameter/variable —
   # converted once per query, usually benign for seekability). Beast2 fixture:
   # CONVERT_IMPLICIT(int,[@1],0) is parameter-side yet was reported with the
@@ -723,7 +784,7 @@ function Get-SqlPlanInsights {
     if ($s -match "TRY_CAST\(") { $flags += "try_cast()" }
     if ($s -match "CONVERT\(" -or $s -match "Convert\(") { $flags += "convert()" }
     if ($s -match "CONVERT_IMPLICIT") {
-      # v13: side-aware flag
+      # v10: side-aware flag
       if ((Get-ConvertImplicitSide $s) -eq 'parameter') { $flags += "convert_implicit-param" } else { $flags += "convert_implicit" }
     }
 
@@ -755,7 +816,7 @@ function Get-SqlPlanInsights {
       $s = $cr.GetAttribute("Schema")
       $t = $cr.GetAttribute("Table")
       $c = $cr.GetAttribute("Column")
-      # v12 fix: Database/Schema/Table attributes arrive pre-bracketed in showplan
+      # v10: Database/Schema/Table attributes arrive pre-bracketed in showplan
       # XML (Table="[Posts]") while Column does not; strip before re-wrapping or
       # names render double-bracketed ([[Posts]]).
       $parts = @($d,$s,$t,$c) | Where-Object { $_ -and $_ -ne "" } | ForEach-Object { $_.Trim('[',']') }
@@ -771,7 +832,7 @@ function Get-SqlPlanInsights {
       $sk = $p.SelectSingleNode(".//sp:SeekKeys",$nsm)
       if (-not $sk) { continue }
 
-      # v11 fix: equality seeks (the common case under nested loops) are expressed
+      # v10: equality seeks (the common case under nested loops) are expressed
       # as <Prefix ScanType="EQ">, not StartRange/EndRange. The old code never
       # handled Prefix, so the pretty renderer returned null and the display fell
       # back to the raw ScalarString — showing only the probe value ("[u].[Id]")
@@ -1033,7 +1094,7 @@ function Get-SqlPlanInsights {
   }
 
   $xmlText = $xml.OuterXml
-  # v13 fix: scan for spill markers in the CHOSEN STATEMENT only. $xmlText is the
+  # v10: scan for spill markers in the CHOSEN STATEMENT only. $xmlText is the
   # whole file (kept as-is for the -OutFile bundle), so in multi-batch plans the
   # old scan reported spills belonging to statements this report isn't about,
   # contradicting the per-operator spill section ("none detected") below.
@@ -1287,7 +1348,7 @@ function Get-SqlPlanInsights {
         NonSargableHints = $nonSarg
 
         HasConvertImplicit = if ($nonSarg -and $nonSarg -match 'convert_implicit(?!-param)') { $true } else { $false }
-        HasParamConvertImplicit = if ($nonSarg -and $nonSarg -match 'convert_implicit-param') { $true } else { $false }  # v13
+        HasParamConvertImplicit = if ($nonSarg -and $nonSarg -match 'convert_implicit-param') { $true } else { $false }  # v10
 
         SortKeys = (Get-SortKeys $op)
         JoinPredicate = $joinPred
@@ -1651,13 +1712,13 @@ try {
   ForEach-Object {
     $likely = @()
     if ($_.HasConvertImplicit) { $likely += "implicit conversion (CONVERT_IMPLICIT, column-side)" }
-    elseif ($_.HasParamConvertImplicit) { $likely += "parameter-side implicit conversion (converted once; usually benign)" }  # v13
+    elseif ($_.HasParamConvertImplicit) { $likely += "parameter-side implicit conversion (converted once; usually benign)" }  # v10
     if ($_.NonSargableHints) {
       $hints = $_.NonSargableHints -split ","
       foreach ($h in $hints) {
         switch ($h) {
-          "convert_implicit" { }        # v13: reported via HasConvertImplicit line above
-          "convert_implicit-param" { }  # v13: reported via HasParamConvertImplicit line above
+          "convert_implicit" { }        # v10: reported via HasConvertImplicit line above
+          "convert_implicit-param" { }  # v10: reported via HasParamConvertImplicit line above
           "leading-wildcard" { $likely += "leading-wildcard LIKE" }
           "date-fn" { $likely += "date function on column" }
           "string-fn" { $likely += "string function on column" }
@@ -2052,7 +2113,7 @@ try {
       if ([string]::IsNullOrWhiteSpace($expr)) { continue }
 
       if ($expr -match "CONVERT_IMPLICIT") {
-        $ciSide = Get-ConvertImplicitSide $expr   # v13
+        $ciSide = Get-ConvertImplicitSide $expr   # v10
         $ciLabel = if ($ciSide -eq 'parameter') { "implicit conversion (parameter-side, usually benign)" } else { "implicit conversion (column-side)" }
         Add-SargIssue $op.NodeId $ciLabel $expr
       }
@@ -2077,7 +2138,7 @@ try {
     if ($nid -eq $null) { $nid = 0 }
 
     if ($expr -match "CONVERT_IMPLICIT") {
-      $ciSide = Get-ConvertImplicitSide $expr   # v13
+      $ciSide = Get-ConvertImplicitSide $expr   # v10
       $ciLabel = if ($ciSide -eq 'parameter') { "implicit conversion (parameter-side, usually benign)" } else { "implicit conversion (column-side)" }
       Add-SargIssue $nid $ciLabel $expr
     }
@@ -2141,7 +2202,7 @@ try {
             "try_cast()" { "TRY_CAST on column" }
             "convert()" { "CONVERT on column" }
             "convert_implicit" { "implicit conversion (column-side)" }
-            "convert_implicit-param" { "implicit conversion (parameter-side, usually benign)" }   # v13
+            "convert_implicit-param" { "implicit conversion (parameter-side, usually benign)" }   # v10
             default { "non-sargable ($h)" }
           }
 
@@ -2209,7 +2270,7 @@ try {
   if ($winRowMode) { $rewriteHints.Add("Row-mode windowing pattern detected (Segment / Sequence Project / Window Spool). Consider indexing to support ORDER BY / PARTITION BY, or rewrite to reduce windowed rows.") }
   if ($winBatch)   { $rewriteHints.Add("Batch-mode Window Aggregate detected. This is the efficient replacement for the row-mode Window Spool pattern (enabled by a columnstore index or batch-mode-on-rowstore). Verify it isn't spilling and that the input row volume feeding it is controlled.") }
   if ($operatorRows | Where-Object { $_.PhysicalOp -match "Table Spool|Index Spool" }) { $rewriteHints.Add("Spool detected. Often caused by nested loops rebinds/correlation. Consider rewriting correlated subqueries, adding supporting indexes, or forcing a better join strategy.") }
-  # v13: parameter-side-only conversions are not a non-SARGability problem; don't
+  # v10: parameter-side-only conversions are not a non-SARGability problem; don't
   # raise the rewrite alarm for them.
   $hardSargIssues = @($sargabilityIssues | Where-Object {
     @(($_.Issues -split ';\s*') | Where-Object { $_ -and $_ -notmatch 'parameter-side' }).Count -gt 0
@@ -2254,7 +2315,7 @@ try {
         ($null -ne $memoryGrantInfo.GrantedKB   -and $memoryGrantInfo.GrantedKB   -gt 0) -or
         ($null -ne $memoryGrantInfo.UsedKB      -and $memoryGrantInfo.UsedKB      -gt 0) -or
         ($null -ne $memoryGrantInfo.MaxUsedKB   -and $memoryGrantInfo.MaxUsedKB   -gt 0)
-      )) { $suggestions.Add("Memory grant info present. Compare Granted vs Used/MaxUsed to spot spills or wasted grants.") }  # v13: require a non-zero value; all-zero grants have nothing to compare
+      )) { $suggestions.Add("Memory grant info present. Compare Granted vs Used/MaxUsed to spot spills or wasted grants.") }  # v10: require a non-zero value; all-zero grants have nothing to compare
   if (@($spillSignals).Count -gt 0) { $suggestions.Add("Spills detected in plan warnings. Investigate Sort/Hash spills, memory grants, and tempdb pressure.") }
   if (@($parallelSkewSignals).Count -gt 0) { $suggestions.Add("Parallelism skew detected (thread row imbalance). Investigate data distribution, join keys, and exchanges; consider different join/order or filtered/composite indexes.") }
   if (@($manyToManyMergeSignals).Count -gt 0) { $suggestions.Add("Many-to-many Merge Join detected. Check join predicates and indexing; this can amplify work via worktables and large memory use.") }
@@ -2267,7 +2328,7 @@ try {
   if (@($operatorRedFlags).Count -gt 0) { $suggestions.Add("Operator red flags detected (heuristic). Review spools/sorts/hashes and rebind patterns.") }
   if (@($sargabilityIssues | Where-Object {
         @(($_.Issues -split ';\s*') | Where-Object { $_ -and $_ -notmatch 'parameter-side' }).Count -gt 0
-      }).Count -gt 0) { $suggestions.Add("Non-SARGable predicate signals detected. Review implicit conversions, functions on columns, and leading-wildcard LIKE patterns.") }  # v13: exclude parameter-side-only rows
+      }).Count -gt 0) { $suggestions.Add("Non-SARGable predicate signals detected. Review implicit conversions, functions on columns, and leading-wildcard LIKE patterns.") }  # v10: exclude parameter-side-only rows
   if (@($indexIntersectionSignals).Count -gt 0) { $suggestions.Add("Bitmap/index-intersection signals detected. Consider composite indexes that match predicates/join keys.") }
 
   # --- v9: CE model + hint signals (whole document, all statements) ---
@@ -2280,12 +2341,12 @@ try {
   }
 
   $predicateConvertCount = @($operatorRows | Where-Object { $_.HasConvertImplicit }).Count
-  $paramConvertCount = @($operatorRows | Where-Object { $_.HasParamConvertImplicit }).Count   # v13
+  $paramConvertCount = @($operatorRows | Where-Object { $_.HasParamConvertImplicit }).Count   # v10
   if ($predicateConvertCount -gt 0) {
     $suggestions.Add("Predicate implicit conversion(s) detected (CONVERT_IMPLICIT, column-side). These can prevent seeks and skew cardinality; align datatypes (parameters/columns) where possible.")
   }
   elseif ($paramConvertCount -gt 0) {
-    # v13: parameter-side only — converted once per query, seek preserved; informational.
+    # v10: parameter-side only — converted once per query, seek preserved; informational.
     $suggestions.Add("Parameter-side implicit conversion(s) detected (CONVERT_IMPLICIT on a parameter/variable). Usually benign for seeks; still worth aligning parameter datatypes with column types.")
   }
   if (@($expressionConvertImplicit).Count -gt 0) {
@@ -2759,7 +2820,7 @@ ORDER BY o.FullTable, st.name;
   # multi-statement captures, which is misleading.
   $chosenCEVersion = $null
   if ($chosenStmt) {
-    $chosenCERow = @($ceModelInfo | Where-Object { [string]$_.StatementId -eq [string](Get-StmtKey $chosenStmt) }) | Select-Object -First 1   # v13: batch-qualified key on both sides
+    $chosenCERow = @($ceModelInfo | Where-Object { [string]$_.StatementId -eq [string](Get-StmtKey $chosenStmt) }) | Select-Object -First 1   # v10: batch-qualified key on both sides
     if ($chosenCERow) { $chosenCEVersion = $chosenCERow.CEVersion }
   }
   if ($null -eq $chosenCEVersion -and @($ceModelInfo).Count -gt 0) { $chosenCEVersion = @($ceModelInfo)[0].CEVersion }
@@ -2848,7 +2909,7 @@ ORDER BY o.FullTable, st.name;
         $idxsForGap = @($dbInspection.Indexes | Where-Object { $_.FullTable -eq $k })
         $candidates = @($idxsForGap | Where-Object { Index-KeyPrefixMatches $_.KeyCols $cols })
 
-        # v11 fix: clustering-key columns live at the leaf of every nonclustered
+        # v10: clustering-key columns live at the leaf of every nonclustered
         # index on the table, so they can never force a lookup and must not be
         # reported as INCLUDE gaps (e.g. Id on Posts under PK_Posts_Id).
         $clusteringKeyCols = New-Object 'System.Collections.Generic.HashSet[string]'
@@ -3134,7 +3195,7 @@ if (-not $covered) {
       if ([System.IO.Path]::IsPathRooted($OutFile)) { $outFull = [System.IO.Path]::GetFullPath($OutFile) }
       else { $outFull = [System.IO.Path]::GetFullPath((Join-Path (Get-Location -PSProvider FileSystem).ProviderPath $OutFile)) }
     } catch { $outFull = $OutFile }
-    # v14: stamp the bundle filename with the run date/time so successive runs
+    # v10: stamp the bundle filename with the run date/time so successive runs
     # don't overwrite each other (plan.json -> plan_20260713_142530.json).
     try {
       $outDir = [System.IO.Path]::GetDirectoryName($outFull)
@@ -3221,7 +3282,7 @@ else { Write-Host ""
        Write-Host "No Cardinality Estimate Mismatches Detected" -ForegroundColor Yellow}
 
 # wait stats
-# v13 fix: use the statement-scoped selector (not $xml directly) so multi-batch
+# v10: use the statement-scoped selector (not $xml directly) so multi-batch
 # files don't merge every statement's WaitStats into one grid with duplicate
 # WaitTypes; group-by as a second line of defence and to keep totals honest.
 $waitNodes = Select-Nodes "//sp:WaitStats/sp:Wait"
@@ -3253,7 +3314,7 @@ if ($waitNodes.Count -gt 0) {
     $waitStatsReport | Format-Table -AutoSize
 }
 else {
-    # v14: distinguish "no waits" from "section silently missing" — the chosen
+    # v10: distinguish "no waits" from "section silently missing" — the chosen
     # statement may simply have recorded no waits, or this may be an estimated plan.
     Write-Host ""
     Write-Host "Query Wait Statistics (Actual Plan Only):" -ForegroundColor Yellow
@@ -3331,9 +3392,9 @@ else {
   @{ n = 'RowsRead'; e = { F0 $_.RowsRead } },
   @{ n = 'Execs'; e = { F0 $_.Execs } },
   @{ n = 'Access'; e = { $_.Access } },
-  @{ n = 'Object'; e = { $_.Object } },
   @{ n = 'Warnings'; e = { $_.Warnings } } |
   Format-Table -AutoSize
+  Write-ObjectKey ($result.TopOperators | Sort-Object NodeId -Descending)
 
   # --- NEW: Explanatory Blurb for Top Operators ---
   Write-Host "  Note: Operators highlighted with >> << (e.g., >> SORT <<, >> HASH MATCH <<) are heavy execution nodes" -ForegroundColor DarkGray
@@ -3367,9 +3428,9 @@ else {
     @{ n = 'RowsRead'; e = { F0 $_.RowsRead } },
     @{ n = 'Execs'; e = { F0 $_.Execs } },
     @{ n = 'Access'; e = { $_.Access } },
-    @{ n = 'Object'; e = { $_.Object } },
     @{ n = 'Warnings'; e = { $_.Warnings } } |
     Format-Table -AutoSize
+    Write-ObjectKey $selfFiltered
   } else {
     Write-Host " - (same operators as subtree-cost list; omitted)" -ForegroundColor DarkGray
   }
@@ -3386,10 +3447,10 @@ else {
        @{ n = 'ActOut'; e = { if ($_.ActRowsOut -ne $null -and $_.ActRowsOut -ne '') { F0 $_.ActRowsOut } else { '' } } },
        @{ n = 'WasteRatio'; e = { if ($_.RowsRead -gt 0 -and $_.ActRows -gt 0) { F2 ($_.RowsRead / $_.ActRows) } else { '' } } },
        @{ n = 'EstCost'; e = { F2 $_.EstCost } },
-       @{ n = 'Access'; e = { $_.Access } },
-       @{ n = 'Object'; e = { $_.Object } } |
+       @{ n = 'Access'; e = { $_.Access } } |
     Format-Table -AutoSize
-    
+    Write-ObjectKey $readsHeavyOps
+
     Write-Host "  Note: High RowsRead combined with low ActOut indicates severe residual predicate CPU burn." -ForegroundColor Gray
   } else {
     Write-Host " - (No runtime row metrics available in this plan)" -ForegroundColor DarkGray
@@ -3398,7 +3459,7 @@ else {
   Write-Host ""
   Write-Host "Key/RID lookups (call volume):" -ForegroundColor Yellow
   if (@($keyLookups).Count -gt 0) {
-    $keyLookups | Select-Object NodeId, PhysicalOp, LookupCalls, ActRows, EstRows, Object | Format-Table -AutoSize
+    $keyLookups | Select-Object NodeId, PhysicalOp, LookupCalls, ActRows, EstRows, @{ n = 'Object'; e = { $o = ShortObjectName $_.Object; if ($null -eq $o) { '' } else { $o } } } | Format-Table -AutoSize
     $painfulLookups = @($keyLookups | Where-Object { $_.LookupCalls -ne $null -and $_.LookupCalls -ge $LookupCallsThreshold })
     if ($painfulLookups.Count -gt 0) {
       Write-Host ("  >> {0} lookup operator(s) at or above the {1:N0}-call threshold. Each call is a random clustered-index probe;" -f $painfulLookups.Count, $LookupCallsThreshold) -ForegroundColor DarkYellow
@@ -3410,7 +3471,7 @@ else {
   }
 
   # -----------------------------
-  # v13: Access predicates (chosen statement)
+  # v10: Access predicates (chosen statement)
   # The pretty-rendered seek/residual predicates were previously only visible in
   # the CE details section — i.e. only when estimates were wrong. Healthy plans
   # never displayed their access predicates at all. This section always shows
@@ -3419,7 +3480,7 @@ else {
   # -----------------------------
   Write-Host ""
   Write-Host "Access predicates (chosen statement):" -ForegroundColor Yellow
-  # v14: display-shorten column references (four-part -> [Table].[Column]) so the
+  # v10: display-shorten column references (four-part -> [Table].[Column]) so the
   # interesting part of the predicate fits inside the truncation window; the
   # underlying operator rows keep full names.
   function Shorten-PredicateForDisplay ([string]$p2) {
@@ -3652,7 +3713,7 @@ else {
 
   Write-Host ""
   Write-Host "Predicate CONVERT_IMPLICIT signals (heuristic):" -ForegroundColor Yellow
-  # v13: show both sides with an explicit Side column; the tool now performs the
+  # v10: show both sides with an explicit Side column; the tool now performs the
   # column-vs-parameter check the old tip asked the reader to do by hand.
   $predConvertNodes = $operatorRows |
     Where-Object { $_.HasConvertImplicit -or $_.HasParamConvertImplicit } |
@@ -3909,7 +3970,12 @@ Write-Host ""
       $optForList = @()
       foreach ($p in $psIssues) {
           $cleanC = $p.CompiledValue.Trim('(',')')
-          $val = if ($cleanC -match "^[+-]?\d+(\.\d+)?$") { $cleanC } else { "N'$cleanC'" }
+          # v10 fix: string/nvarchar ParameterCompiledValue arrives ALREADY quoted from the
+          # plan XML (e.g. N'999999') - only numeric values are bare and need Trim()'d parens
+          # removed. Re-wrapping an already-quoted value produced invalid T-SQL: N'N'999999''.
+          $val = if ($cleanC -match "^[+-]?\d+(\.\d+)?$") { $cleanC }
+                 elseif ($cleanC -match "^N?'.*'$") { $cleanC }
+                 else { "N'$cleanC'" }
           $optForList += "$($p.Name) = $val"
       }
       Write-Host ("OPTION (OPTIMIZE FOR ({0}));" -f ($optForList -join ", "))
@@ -3919,7 +3985,10 @@ Write-Host ""
       $optForRuntimeList = @()
       foreach ($p in $psIssues) {
           $cleanR = $p.RuntimeValue.Trim('(',')')
-          $val = if ($cleanR -match "^[+-]?\d+(\.\d+)?$") { $cleanR } else { "N'$cleanR'" }
+          # v10 fix: same double-quoting bug as Test 3's CompiledValue, mirrored for RuntimeValue.
+          $val = if ($cleanR -match "^[+-]?\d+(\.\d+)?$") { $cleanR }
+                 elseif ($cleanR -match "^N?'.*'$") { $cleanR }
+                 else { "N'$cleanR'" }
           $optForRuntimeList += "$($p.Name) = $val"
       }
       Write-Host ("OPTION (OPTIMIZE FOR ({0}));" -f ($optForRuntimeList -join ", "))
