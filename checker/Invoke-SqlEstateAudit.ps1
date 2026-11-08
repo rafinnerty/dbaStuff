@@ -211,7 +211,7 @@
     .\Invoke-SqlEstateAudit.ps1 -CmsInstance CMS01 -RunPerfmon -PerfmonMode Trend
 
 .EXAMPLE
-    .\Invoke-SqlEstateAudit.ps1 -SqlInstance SQL01,SQL02\PROD -DiscoverInstances -DiscoveryDomain corp.zedra.com
+    .\Invoke-SqlEstateAudit.ps1 -SqlInstance SQL01,SQL02\PROD -DiscoverInstances -DiscoveryDomain corp.blah.com
 
 .EXAMPLE
     .\Invoke-SqlEstateAudit.ps1 -InstancesFile .\instances.txt -ConfigSqlInstance SQL01 -ConfigDatabase sqlChecker -RunPerfmon -PerfmonMode Extended
