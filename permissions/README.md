@@ -115,18 +115,18 @@ Parameter	Description
 -ExcludedDbUsersCsv	Comma-separated list of DB users to exclude
 Example Usage
 Basic Run
-.\sqlServerPermisisonsToSpreadsheet.ps1
+.\sqlPermissions.ps1
 
 With Instance File
-.\sqlServerPermisisonsToSpreadsheet.ps1 `
+.\sqlPermissions.ps1 `
   -InstancesFile "C:\DBA\instances.txt"
 
 Exclude Specific DB Users
-.\sqlServerPermisisonsToSpreadsheet.ps1 `
+.\sqlPermissions.ps1 `
   -ExcludedDbUsersCsv "MS_DataCollectorInternalUser,guest"
 
 Include System Logins
-.\sqlServerPermisisonsToSpreadsheet.ps1 `
+.\sqlPermissions.ps1 `
   -IncludeSystemLogins
 
 Requirements

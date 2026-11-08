@@ -15,8 +15,8 @@ Two principles run through all of it:
 
 | Folder | Tool | What it does |
 | --- | --- | --- |
-| [`Plan Visualizer`](Plan%20Visualizer) | `plan_visualizer_V3.html` | Single-file, offline execution-plan viewer. Drag in a `.sqlplan` or a JSON bundle from the analyzer and get an interactive diagram, cost/cardinality grid, and a tuning-insights panel. |
-| [`execution-plans`](execution-plans) | `executionPlanReport_v7.ps1` (`Get-SqlPlanInsights`) | Parses ShowPlan XML like an automated tuning consultant — CE mismatches, TempDB spills, SARGability violations, implicit conversions, parameter-sniffing risk — and can augment it with live Query Store / index telemetry. |
+| [`plan-visualizer`](plan-visualizer) | `plan_visualizer_v4.html` | Single-file, offline execution-plan viewer. Drag in a `.sqlplan` or a JSON bundle from the analyzer and get an interactive diagram, cost/cardinality grid, and a tuning-insights panel. |
+| [`execution-plans`](execution-plans) | `executionPlanReport_v10.ps1` (`Get-SqlPlanInsights`) | Parses ShowPlan XML like an automated tuning consultant — CE mismatches, TempDB spills, SARGability violations, implicit conversions, parameter-sniffing risk — and can augment it with live Query Store / index telemetry. |
 | [`checker`](checker) | `Invoke-SqlEstateChecks_v2.ps1` | **(WIP)** Read-only estate-wide health check across a list of instances — configuration drift, backup/integrity currency, capacity risks — rolled up into a single self-contained HTML report. |
 | [`move-database-objects`](move-database-objects) | `shrinkDbObjects.ps1` | Relocates tables, heaps and indexes (including LOB data) onto a target filegroup, preserving constraints. Used to reclaim space after a shrink, or to move objects between filegroups safely. |
 | [`permissions`](permissions) | `sqlPermissions.ps1` | Exports instance-level role memberships and database-level permissions across a list of instances to a filtered, auto-width Excel workbook, then zips it. |
@@ -40,7 +40,7 @@ Get-SqlPlanInsights `
 ```
 
 ```text
-2. Open plan_visualizer_V3.html in any browser.
+2. Open plan_visualizer_v4.html in any browser.
 3. Drag plan.json (or any raw .sqlplan) onto the page.
 ```
 
@@ -48,7 +48,7 @@ The bundle carries the plan XML *plus* the analyzer's findings, live index/stati
 
 ---
 
-## Plan Visualizer (`plan_visualizer_V3.html`)
+## Plan Visualizer (`plan_visualizer_v4.html`)
 
 A single, dependency-free HTML file. Open it in any modern browser — no install, no build step, no server. It reads either a raw `.sqlplan` / `SHOWPLAN_XML` document or a `sqlplan-insights` JSON bundle produced by `Get-SqlPlanInsights`.
 
@@ -63,7 +63,7 @@ Get a plan out of SSMS with right-click → **Save Execution Plan As…**.
 **Everything runs locally — the page never connects to a database and nothing is uploaded.**
 ---
 
-## Execution Plan Analyzer — `Get-SqlPlanInsights` (`executionPlanReport_v7.ps1`)
+## Execution Plan Analyzer — `Get-SqlPlanInsights` (`executionPlanReport_v10.ps1`)
 
 An automated query-tuning consultant in a function. It parses ShowPlan XML and surfaces the things that actually matter for tuning: cardinality-estimation mismatches, TempDB spills, non-SARGable predicates, implicit conversions and parameter-sniffing risk.
 
@@ -128,7 +128,7 @@ Findings are graded so the report leads with what actually needs attention rathe
 .\Invoke-SqlEstateChecks_v2.ps1 -Instances "SQL01","SQL02\PROD" -OutputDir .\out
 ```
 
-Requires **dbatools**, and read access (typically `VIEW SERVER STATE` plus database-level read) on each instance. The file `Invoke-SqlEstateChecks.ps1--SUPERSEDED-BY-V2` is the previous version, kept for reference only — run **v2**.
+Requires **dbatools**, and read access (typically `VIEW SERVER STATE` plus database-level read) on each instance. Earlier versions are kept in [`checker/archive`](checker/archive) for reference only — run **v2**.
 
 ---
 
